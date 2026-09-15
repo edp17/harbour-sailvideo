@@ -1,0 +1,15 @@
+build/
+RPMS/
+*.rpm
+*.tar.bz2
+*.user
+*.user.*
+.directory
+harbour-sailvideo_autogen/
+cmake_install.cmake
+CMakeFiles/
+CMakeCache.txt
+Makefile
+documentation.list
+harbour-sailvideo
+install_manifest.txt

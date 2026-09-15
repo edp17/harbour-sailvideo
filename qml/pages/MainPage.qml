@@ -1,0 +1,427 @@
+/*
+    Copyright (C) 2026 edp17 and chatGPT
+
+    This file is part of harbour-sailvideo.
+
+    The harbour-sailvideo is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    The harbour-sailvideo is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with the harbour-sailvideo. If not, see <http://www.gnu.org/licenses/>.
+*/
+import QtQuick 2.0
+import Sailfish.Silica 1.0
+
+Page {
+    id: page
+
+    allowedOrientations: Orientation.All
+
+    RemorsePopup {
+        id: remorsePopup
+    }
+
+    function sourceSummary() {
+        if (!appWindow.hasMedia) return qsTr("No video selected")
+        if (appWindow.currentSourceKind === "smb") return qsTr("NAS")
+        if (appWindow.currentUsesStreamBridge) return qsTr("HTTP bridge")
+        if (appWindow.isNetworkUrl(appWindow.currentMediaUrl)) return qsTr("URL")
+        return qsTr("Local")
+    }
+
+    function openLastNasSource() {
+        if (!appSettings.hasLastNasSource) return
+
+        pageStack.push(Qt.resolvedUrl("NasBrowserPage.qml"),
+                       { sourceTitle: appSettings.lastNasSourceTitle,
+                         host: appSettings.lastNasHost,
+                         port: appSettings.lastNasPort,
+                         share: appSettings.lastNasShare,
+                         domain: appSettings.lastNasDomain,
+                         username: appSettings.lastNasUsername,
+                         guest: appSettings.lastNasGuest,
+                         currentPath: appSettings.lastNasPath })
+    }
+
+    function lastNasTitle() {
+        if (!appSettings.hasLastNasSource) return ""
+        if (appSettings.lastNasSourceTitle.length > 0) return appSettings.lastNasSourceTitle
+        return appSettings.lastNasShare
+    }
+
+    function lastNasSubtitle() {
+        if (!appSettings.hasLastNasSource) return ""
+        return appSettings.lastNasPath.length > 0
+                ? appSettings.lastNasPath
+                : qsTr("Share root")
+    }
+
+    SilicaFlickable {
+        anchors.fill: parent
+        contentHeight: contentColumn.height + Theme.paddingLarge
+
+        PullDownMenu {
+            MenuItem {
+                text: qsTr("Settings")
+                onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
+            }
+
+            MenuItem {
+                text: qsTr("About")
+                onClicked: pageStack.push(Qt.resolvedUrl("AboutPage.qml"))
+            }
+        }
+
+        Column {
+            id: contentColumn
+
+            width: parent.width
+            spacing: Theme.paddingSmall
+
+            PageHeader {
+                title: qsTr("SailVideo")
+            }
+
+            SectionHeader {
+                text: qsTr("Sources")
+            }
+
+            Row {
+                width: parent.width
+                spacing: Theme.paddingSmall
+
+                BackgroundItem {
+                    width: Math.floor((parent.width - 2 * Theme.paddingSmall) / 3)
+                    height: Theme.itemSizeLarge * 2
+                    onClicked: pageStack.push(Qt.resolvedUrl("LocalVideosPage.qml"))
+
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.horizontalPageMargin
+                        anchors.rightMargin: Theme.paddingSmall / 2
+                        radius: Theme.paddingMedium
+                        color: parent.highlighted ? "#33209fd6" : "#11000000"
+                    }
+
+                    Column {
+                        anchors.centerIn: parent
+                        width: parent.width - Theme.horizontalPageMargin
+                        spacing: Theme.paddingSmall / 2
+
+                        Label {
+                            width: parent.width
+                            text: "▶"
+                            color: Theme.highlightColor
+                            font.pixelSize: Theme.fontSizeHuge
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+
+                        Label {
+                            width: parent.width
+                            text: qsTr("Local")
+                            color: parent.parent.highlighted ? Theme.highlightColor : Theme.primaryColor
+                            horizontalAlignment: Text.AlignHCenter
+                            truncationMode: TruncationMode.Fade
+                        }
+                    }
+                }
+
+                BackgroundItem {
+                    width: Math.floor((parent.width - 2 * Theme.paddingSmall) / 3)
+                    height: Theme.itemSizeLarge * 2
+                    onClicked: pageStack.push(Qt.resolvedUrl("NasSourcesPage.qml"))
+
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.paddingSmall / 2
+                        anchors.rightMargin: Theme.paddingSmall / 2
+                        radius: Theme.paddingMedium
+                        color: parent.highlighted ? "#33209fd6" : "#11000000"
+                    }
+
+                    Column {
+                        anchors.centerIn: parent
+                        width: parent.width - Theme.paddingMedium
+                        spacing: Theme.paddingSmall / 2
+
+                        Label {
+                            width: parent.width
+                            text: "▣"
+                            color: Theme.highlightColor
+                            font.pixelSize: Theme.fontSizeExtraLarge
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+
+                        Label {
+                            width: parent.width
+                            text: qsTr("NAS")
+                            color: parent.parent.highlighted ? Theme.highlightColor : Theme.primaryColor
+                            horizontalAlignment: Text.AlignHCenter
+                            truncationMode: TruncationMode.Fade
+                        }
+
+                        Label {
+                            width: parent.width
+                            text: nasSources.count > 0 ? qsTr("%1 saved").arg(nasSources.count) : qsTr("SMB")
+                            color: Theme.secondaryColor
+                            font.pixelSize: Theme.fontSizeTiny
+                            horizontalAlignment: Text.AlignHCenter
+                            truncationMode: TruncationMode.Fade
+                        }
+                    }
+                }
+
+                BackgroundItem {
+                    width: Math.floor((parent.width - 2 * Theme.paddingSmall) / 3)
+                    height: Theme.itemSizeLarge * 2
+                    onClicked: pageStack.push(Qt.resolvedUrl("NetworkSourcesPage.qml"))
+
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.paddingSmall / 2
+                        anchors.rightMargin: Theme.horizontalPageMargin
+                        radius: Theme.paddingMedium
+                        color: parent.highlighted ? "#33209fd6" : "#11000000"
+                    }
+
+                    Column {
+                        anchors.centerIn: parent
+                        width: parent.width - Theme.horizontalPageMargin
+                        spacing: Theme.paddingSmall / 2
+
+                        Label {
+                            width: parent.width
+                            text: "↗"
+                            color: Theme.highlightColor
+                            font.pixelSize: Theme.fontSizeHuge
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+
+                        Label {
+                            width: parent.width
+                            text: qsTr("URL")
+                            color: parent.parent.highlighted ? Theme.highlightColor : Theme.primaryColor
+                            horizontalAlignment: Text.AlignHCenter
+                            truncationMode: TruncationMode.Fade
+                        }
+                    }
+                }
+            }
+
+            SectionHeader {
+                visible: appWindow.hasMedia
+                text: qsTr("Last played video")
+            }
+
+            BackgroundItem {
+                id: lastPlayedCard
+
+                visible: appWindow.hasMedia
+                width: parent.width
+                height: Theme.itemSizeLarge
+                onClicked: appWindow.resumeCurrentMedia()
+
+                Rectangle {
+                    anchors {
+                        fill: parent
+                        leftMargin: Theme.horizontalPageMargin
+                        rightMargin: Theme.horizontalPageMargin
+                        topMargin: Theme.paddingSmall / 2
+                        bottomMargin: Theme.paddingSmall / 2
+                    }
+                    radius: Theme.paddingMedium
+                    color: "#33209fd6"
+                }
+
+                Row {
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        leftMargin: Theme.horizontalPageMargin + Theme.paddingMedium
+                        rightMargin: Theme.horizontalPageMargin + Theme.paddingMedium
+                        verticalCenter: parent.verticalCenter
+                    }
+                    spacing: Theme.paddingMedium
+
+                    Label {
+                        width: Theme.iconSizeMedium
+                        text: "▶"
+                        color: Theme.highlightColor
+                        font.pixelSize: Theme.fontSizeLarge
+                        horizontalAlignment: Text.AlignHCenter
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Column {
+                        width: parent.width - Theme.iconSizeMedium - Theme.paddingMedium
+                        spacing: Theme.paddingSmall / 2
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Label {
+                            width: parent.width
+                            text: appWindow.currentMediaTitle
+                            color: lastPlayedCard.highlighted ? Theme.highlightColor : Theme.primaryColor
+                            font.pixelSize: Theme.fontSizeMedium
+                            truncationMode: TruncationMode.Fade
+                        }
+
+                        Label {
+                            width: parent.width
+                            text: qsTr("%1 · %2")
+                                  .arg(appWindow.lastKnownPosition > 0
+                                       ? qsTr("Continue from %1").arg(appWindow.formatTime(appWindow.lastKnownPosition))
+                                       : qsTr("Start from beginning"))
+                                  .arg(sourceSummary())
+                            color: Theme.secondaryColor
+                            font.pixelSize: Theme.fontSizeTiny
+                            truncationMode: TruncationMode.Fade
+                        }
+                    }
+                }
+            }
+
+            Button {
+                visible: appWindow.isCurrentLocalFile()
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: appWindow.currentUsesStreamBridge
+                      ? qsTr("Replay directly")
+                      : qsTr("Replay through HTTP bridge")
+                onClicked: {
+                    if (appWindow.currentUsesStreamBridge) {
+                        appWindow.openMedia(appWindow.currentMediaUrl,
+                                            appWindow.currentMediaTitle,
+                                            appWindow.lastKnownPosition)
+                    } else {
+                        appWindow.openLocalFileThroughBridge(appWindow.currentMediaUrl,
+                                                             appWindow.currentMediaTitle,
+                                                             appWindow.lastKnownPosition)
+                    }
+                }
+            }
+
+            SectionHeader {
+                visible: appSettings.hasLastNasSource
+                text: qsTr("Last browsed NAS")
+            }
+
+            BackgroundItem {
+                visible: appSettings.hasLastNasSource
+                width: parent.width
+                height: Theme.itemSizeMedium
+                onClicked: page.openLastNasSource()
+
+                Row {
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        leftMargin: Theme.horizontalPageMargin
+                        rightMargin: Theme.horizontalPageMargin
+                        verticalCenter: parent.verticalCenter
+                    }
+                    spacing: Theme.paddingMedium
+
+                    Label {
+                        width: Theme.iconSizeSmall
+                        text: "▣"
+                        color: Theme.secondaryColor
+                        horizontalAlignment: Text.AlignHCenter
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Column {
+                        width: parent.width - Theme.iconSizeSmall - Theme.paddingMedium
+                        spacing: Theme.paddingSmall / 2
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Label {
+                            width: parent.width
+                            text: page.lastNasTitle()
+                            color: parent.parent.highlighted ? Theme.highlightColor : Theme.primaryColor
+                            truncationMode: TruncationMode.Fade
+                        }
+
+                        Label {
+                            width: parent.width
+                            text: page.lastNasSubtitle()
+                            color: Theme.secondaryColor
+                            font.pixelSize: Theme.fontSizeTiny
+                            truncationMode: TruncationMode.Fade
+                        }
+                    }
+                }
+            }
+
+            SectionHeader {
+                visible: playbackHistory.count > 0
+                text: qsTr("Recently played")
+            }
+
+            Repeater {
+                model: playbackHistory
+
+                delegate: BackgroundItem {
+                    width: contentColumn.width
+                    height: index < 3 ? Theme.itemSizeMedium : 0
+                    visible: index < 3
+
+                    onClicked: appWindow.openHistoryEntry(url, title, position)
+
+                    Row {
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            leftMargin: Theme.horizontalPageMargin
+                            rightMargin: Theme.horizontalPageMargin
+                            verticalCenter: parent.verticalCenter
+                        }
+                        spacing: Theme.paddingMedium
+
+                        Label {
+                            width: Theme.iconSizeSmall
+                            text: "▶"
+                            color: Theme.secondaryColor
+                            horizontalAlignment: Text.AlignHCenter
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Column {
+                            width: parent.width - Theme.iconSizeSmall - Theme.paddingMedium
+                            spacing: Theme.paddingSmall / 2
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            Label {
+                                width: parent.width
+                                text: title && title.length > 0
+                                      ? title
+                                      : qsTr("Untitled video")
+                                color: parent.parent.highlighted
+                                       ? Theme.highlightColor
+                                       : Theme.primaryColor
+                                truncationMode: TruncationMode.Fade
+                            }
+
+                            Label {
+                                width: parent.width
+                                text: position > 0
+                                      ? qsTr("%1 · %2").arg(appWindow.formatTime(position)).arg(lastPlayedText)
+                                      : lastPlayedText
+                                color: Theme.secondaryColor
+                                font.pixelSize: Theme.fontSizeTiny
+                                truncationMode: TruncationMode.Fade
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        VerticalScrollDecorator {}
+    }
+}

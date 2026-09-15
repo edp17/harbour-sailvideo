@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+X-Sailfish-ApplicationType=Silica
+Icon=harbour-sailvideo
+Exec=harbour-sailvideo
+Name=SailVideo
+Comment=Local and network video player for Sailfish OS
+MimeType=video/*;
+
+[X-Sailjail]
+Permissions=Audio;Internet;UserDirs;Videos;Downloads;RemovableMedia;MediaIndexing;Secrets
+OrganizationName=org.edp17
+ApplicationName=SailVideo

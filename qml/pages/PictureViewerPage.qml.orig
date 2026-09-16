@@ -30,23 +30,6 @@ Page {
     property real zoom: 1.0
     property bool controlsVisible: true
     property bool slideshowRunning: false
-    property bool activePictureCast: appWindow.castMode
-                                     && (appWindow.castTargetKind === "picture"
-                                         || castManager.imageMedia)
-
-    function slideshowIsRunning() {
-        return activePictureCast
-                ? appWindow.castPictureSlideshowRunning
-                : slideshowRunning
-    }
-
-    function toggleSlideshow() {
-        if (activePictureCast) {
-            appWindow.castPictureSlideshowRunning = !appWindow.castPictureSlideshowRunning
-        } else {
-            slideshowRunning = !slideshowRunning
-        }
-    }
 
     function zoomIn() {
         zoom = Math.min(4.0, zoom * 1.25)
@@ -63,27 +46,15 @@ Page {
     }
 
     function goPrevious() {
-        if (activePictureCast) {
-            appWindow.castPictureSlideshowRunning = false
-            if (appWindow.showPreviousPictureControl()) {
-                fitToScreen()
-            }
-        } else {
-            slideshowRunning = false
-            if (appWindow.showPreviousPicture()) {
-                fitToScreen()
-            }
+        slideshowRunning = false
+        if (appWindow.showPreviousPicture()) {
+            fitToScreen()
         }
     }
 
     function goNext() {
-        var advanced = activePictureCast
-                ? appWindow.showNextPictureControl()
-                : appWindow.showNextPicture()
-        if (advanced) {
+        if (appWindow.showNextPicture()) {
             fitToScreen()
-        } else if (activePictureCast) {
-            appWindow.castPictureSlideshowRunning = false
         } else {
             slideshowRunning = false
         }
@@ -104,24 +75,18 @@ Page {
 
         PullDownMenu {
             MenuItem {
-                visible: page.activePictureCast
-                         ? appWindow.pictureQueue.length > 1
-                         : (appWindow.hasNextPicture || appWindow.hasPreviousPicture)
-                text: page.slideshowIsRunning() ? qsTr("Stop slideshow") : qsTr("Start slideshow")
-                onClicked: page.toggleSlideshow()
+                visible: appWindow.hasNextPicture || appWindow.hasPreviousPicture
+                text: slideshowRunning ? qsTr("Stop slideshow") : qsTr("Start slideshow")
+                onClicked: slideshowRunning = !slideshowRunning
             }
             MenuItem {
-                visible: page.activePictureCast
-                         ? appWindow.hasNextPictureControl
-                         : appWindow.hasNextPicture
-                text: page.activePictureCast ? qsTr("Next media") : qsTr("Next picture")
+                visible: appWindow.hasNextPicture
+                text: qsTr("Next picture")
                 onClicked: page.goNext()
             }
             MenuItem {
-                visible: page.activePictureCast
-                         ? appWindow.hasPreviousPictureControl
-                         : appWindow.hasPreviousPicture
-                text: page.activePictureCast ? qsTr("Previous media") : qsTr("Previous picture")
+                visible: appWindow.hasPreviousPicture
+                text: qsTr("Previous picture")
                 onClicked: page.goPrevious()
             }
             MenuItem {
@@ -239,10 +204,7 @@ Page {
     }
 
     Rectangle {
-        visible: page.controlsVisible
-                 && (page.activePictureCast
-                     ? (appWindow.hasPreviousPictureControl || appWindow.hasNextPictureControl)
-                     : (appWindow.hasPreviousPicture || appWindow.hasNextPicture))
+        visible: page.controlsVisible && (appWindow.hasPreviousPicture || appWindow.hasNextPicture)
         anchors {
             left: parent.left
             right: parent.right
@@ -256,9 +218,7 @@ Page {
             spacing: Theme.paddingLarge
 
             IconButton {
-                enabled: page.activePictureCast
-                         ? appWindow.hasPreviousPictureControl
-                         : appWindow.hasPreviousPicture
+                enabled: appWindow.hasPreviousPicture
                 opacity: enabled ? 1.0 : 0.35
                 icon.source: "image://theme/icon-m-previous"
                 onClicked: page.goPrevious()
@@ -268,21 +228,13 @@ Page {
                 anchors.verticalCenter: parent.verticalCenter
                 color: "white"
                 font.pixelSize: Theme.fontSizeExtraSmall
-                text: page.activePictureCast && appWindow.castFolderNavigationActive
-                      ? qsTr("%1 / %2")
-                            .arg(appWindow.folderMediaQueueIndex + 1)
-                            .arg(appWindow.folderMediaQueue.length)
-                      : (appWindow.pictureQueueIndex >= 0
-                         ? qsTr("%1 / %2")
-                               .arg(appWindow.pictureQueueIndex + 1)
-                               .arg(appWindow.pictureQueue.length)
-                         : qsTr("Picture"))
+                text: appWindow.pictureQueueIndex >= 0
+                      ? qsTr("%1 / %2").arg(appWindow.pictureQueueIndex + 1).arg(appWindow.pictureQueue.length)
+                      : qsTr("Picture")
             }
 
             IconButton {
-                enabled: page.activePictureCast
-                         ? appWindow.hasNextPictureControl
-                         : appWindow.hasNextPicture
+                enabled: appWindow.hasNextPicture
                 opacity: enabled ? 1.0 : 0.35
                 icon.source: "image://theme/icon-m-next"
                 onClicked: page.goNext()
@@ -310,7 +262,7 @@ Page {
     Timer {
         interval: 5000
         repeat: true
-        running: page.slideshowRunning && !page.activePictureCast
+        running: page.slideshowRunning
         onTriggered: page.goNext()
     }
 }

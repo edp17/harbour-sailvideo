@@ -301,24 +301,6 @@ Page {
                                                username,
                                                passwordText(),
                                                guest)
-        appWindow.setSmbPictureQueueFromModel(entryModel,
-                                              entryPath,
-                                              host,
-                                              port,
-                                              share,
-                                              domain,
-                                              username,
-                                              passwordText(),
-                                              guest)
-        appWindow.setSmbFolderMediaQueueFromModel(entryModel,
-                                                  entryPath,
-                                                  host,
-                                                  port,
-                                                  share,
-                                                  domain,
-                                                  username,
-                                                  passwordText(),
-                                                  guest)
 
         var ok = appWindow.openSmbFile(host,
                                        port,
@@ -356,24 +338,6 @@ Page {
                                               username,
                                               passwordText(),
                                               guest)
-        appWindow.setSmbPlaybackQueueFromModel(entryModel,
-                                               entryPath,
-                                               host,
-                                               port,
-                                               share,
-                                               domain,
-                                               username,
-                                               passwordText(),
-                                               guest)
-        appWindow.setSmbFolderMediaQueueFromModel(entryModel,
-                                                  entryPath,
-                                                  host,
-                                                  port,
-                                                  share,
-                                                  domain,
-                                                  username,
-                                                  passwordText(),
-                                                  guest)
 
         var ok = appWindow.openSmbPicture(host,
                                           port,

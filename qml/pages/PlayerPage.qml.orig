@@ -518,12 +518,12 @@ Page {
                     IconButton {
                         id: previousVideoButton
 
-                        enabled: appWindow.hasPreviousVideoControl
+                        enabled: appWindow.hasPreviousVideo
                         opacity: enabled ? 1.0 : 0.35
                         icon.source: "image://theme/icon-m-previous"
 
                         onClicked: {
-                            appWindow.showPreviousVideoControl()
+                            appWindow.playPreviousVideo()
                             controlsHideTimer.restart()
                         }
                     }
@@ -609,12 +609,12 @@ Page {
                     IconButton {
                         id: nextVideoButton
 
-                        enabled: appWindow.hasNextVideoControl
+                        enabled: appWindow.hasNextVideo
                         opacity: enabled ? 1.0 : 0.35
                         icon.source: "image://theme/icon-m-next"
 
                         onClicked: {
-                            appWindow.showNextVideoControl()
+                            appWindow.playNextVideo()
                             controlsHideTimer.restart()
                         }
                     }

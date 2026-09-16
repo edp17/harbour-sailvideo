@@ -8,6 +8,8 @@
 #define LOCALFILESTREAMSERVER_H
 
 #include <QHash>
+#include <QHostAddress>
+#include <QSet>
 #include <QObject>
 #include <QString>
 #include <QTcpServer>
@@ -24,6 +26,7 @@ class LocalFileStreamServer : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool running READ running NOTIFY runningChanged)
+    Q_PROPERTY(bool lanRunning READ lanRunning NOTIFY lanRunningChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
     Q_PROPERTY(qint64 lastResolvedSize READ lastResolvedSize NOTIFY lastResolvedSizeChanged)
 
@@ -34,6 +37,7 @@ public:
     void setSmbBackend(SmbBackend *backend);
 
     bool running() const;
+    bool lanRunning() const;
     QString lastError() const;
     qint64 lastResolvedSize() const;
 
@@ -48,11 +52,26 @@ public:
                                             bool guest,
                                             qint64 size,
                                             const QString &fileName);
+    Q_INVOKABLE QString lanStreamUrlForLocalFile(const QString &urlOrPath,
+                                                      const QString &peerHost);
+    Q_INVOKABLE QString lanStreamUrlForSmbFile(const QString &host,
+                                               int port,
+                                               const QString &share,
+                                               const QString &path,
+                                               const QString &domain,
+                                               const QString &username,
+                                               const QString &password,
+                                               bool guest,
+                                               qint64 size,
+                                               const QString &fileName,
+                                               const QString &peerHost);
     Q_INVOKABLE bool isLocalFile(const QString &urlOrPath) const;
+    Q_INVOKABLE void stopLanSharing();
     Q_INVOKABLE void clear();
 
 signals:
     void runningChanged();
+    void lanRunningChanged();
     void lastErrorChanged();
     void lastResolvedSizeChanged();
 
@@ -93,6 +112,10 @@ private:
     };
 
     bool ensureListening();
+    bool ensureLanListening(const QString &peerHost);
+    QHostAddress lanAddressForPeer(const QHostAddress &peer) const;
+    QString lanUrlForLoopbackUrl(const QString &loopbackUrl,
+                                 const QString &peerHost);
     QString localFilePath(const QString &urlOrPath) const;
     QString createToken() const;
     void setLastError(const QString &message);
@@ -118,6 +141,9 @@ private:
     void closeTransfer(QTcpSocket *socket);
 
     QTcpServer m_server;
+    QTcpServer m_lanServer;
+    QHostAddress m_lanAllowedPeer;
+    QSet<QTcpSocket *> m_lanClients;
     QString m_lastError;
     qint64 m_lastResolvedSize = 0;
     SmbBackend *m_smbBackend = nullptr;

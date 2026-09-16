@@ -44,6 +44,9 @@ public:
 
     int count() const;
 
+    Q_INVOKABLE QString urlAt(int row) const;
+    Q_INVOKABLE QString titleAt(int row) const;
+
 signals:
     void sourceModelChanged();
     void folderPathChanged();

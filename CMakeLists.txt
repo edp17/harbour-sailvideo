@@ -64,6 +64,10 @@ add_executable(harbour-sailvideo
     src/main.cpp
     src/application/appsettings.cpp
     src/application/appsettings.h
+    src/cast/castdevicemodel.cpp
+    src/cast/castdevicemodel.h
+    src/cast/castmanager.cpp
+    src/cast/castmanager.h
     src/media/playbackhistorymodel.cpp
     src/media/playbackhistorymodel.h
     src/media/localvideomodel.cpp

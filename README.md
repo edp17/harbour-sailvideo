@@ -7,7 +7,7 @@ SailVideo is a native Sailfish OS video player intended to support:
 - SMB2/SMB3 NAS shares through bundled libsmb2;
 - additional media-server protocols in later phases.
 
-## Current release: SailVideo 1.0
+## Current development release: SailVideo 1.1.0.1
 
 This checkpoint provides:
 
@@ -114,3 +114,77 @@ library browsing and playback, SMB2/SMB3 NAS browsing and playback through the
 local HTTP Range bridge, persistent HTTP/HTTPS URL sources, resume/history,
 player scaling and gesture controls, Sailfish Secrets credential storage, and
 NAS picture browsing.
+
+## SailVideo 1.1 — Chromecast milestone
+
+SailVideo 1.1 integrates the native Google Chromecast sender work that was
+prototyped and device-tested in the separate CastFish experiment.
+
+Architecture:
+
+```text
+HTTP/HTTPS source
+    -> Chromecast direct URL
+
+Local file / SMB2-SMB3 NAS
+    -> SailVideo LAN HTTP Range bridge
+    -> Chromecast
+
+SailVideo player UI
+    -> native Cast V2 TLS control channel
+    -> Google Default Media Receiver (CC1AD845)
+```
+
+The Chromecast implementation does not require Avahi or an external protobuf
+library. `_googlecast._tcp.local` discovery is implemented with `QUdpSocket`
+and the small Cast V2 protobuf envelope is encoded/decoded directly in C++.
+
+The LAN bridge binds an ephemeral IPv4 port and accepts media requests only
+from the selected Chromecast IP address. Existing localhost playback remains
+unchanged.
+
+The 1.1 integration includes discovery, LOAD at the current playback position,
+play/pause, seek/skip, local and SMB queue previous/next, receiver volume/mute,
+media status, and the proven receiver-session STOP sequence for a proper
+disconnect. Discovered receivers are remembered, so the Cast page does not
+rescan on every visit; an explicit scan action refreshes or adds devices.
+
+Stopping media keeps the Cast receiver connected and changes the action to
+`Start / continue`, allowing the same item to be loaded again without a full
+disconnect/recast cycle. `Leave playing on TV` records the receiver endpoint;
+on a later SailVideo launch the app attempts to rejoin the running Default
+Media Receiver and opens the Chromecast page. Direct web media can continue
+independently after SailVideo exits. Local/SMB media still requires SailVideo
+to remain running because the phone is serving the media URL.
+
+SailVideo's SMB/NAS picture viewer can also display pictures on Chromecast.
+Previous/next navigation and slideshow changes are mirrored to the TV using the
+existing LAN bridge.
+
+Chromecast audio with a known-good SailVideo/NAS video remains an explicit
+device-test item until positively verified on the target device.
+
+
+## SailVideo 1.1.0.1 — Chromecast workflow polish
+
+This iteration keeps the proven 1.1 Cast architecture but tightens the media
+handoff and folder workflows:
+
+- video Cast sessions start at SailVideo's current playback-volume percentage
+  instead of inheriting a receiver volume that may be 100%;
+- `Stop media` preserves the remote position and `Start / continue` reloads the
+  item at that captured position;
+- picture Cast sessions show picture-relevant controls only;
+- the Main-page active-Cast card returns to the active picture/video workflow
+  instead of only opening the receiver-control page;
+- SMB folders now maintain a unified media queue in addition to the existing
+  video-only and picture-only queues;
+- while casting, manual previous/next follows that unified folder order, so a
+  mixed picture/video folder can move naturally between both media types;
+- picture slideshow remains picture-only and can run while the Cast page or
+  Main page is visible, cycling through the folder's images automatically.
+
+Local video-only folders keep their existing video queue. Picture-only SMB
+folders keep picture navigation and slideshow semantics. Mixed SMB folders use
+the unified queue only for Cast manual previous/next, while slideshow skips
+videos by design.

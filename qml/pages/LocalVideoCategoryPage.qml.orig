@@ -70,10 +70,7 @@ Page {
             width: videoGrid.cellWidth
             height: videoGrid.cellHeight
 
-            onClicked: {
-                appWindow.setLocalPlaybackQueue(folderModel, index)
-                appWindow.openMedia(url, title, undefined, true)
-            }
+            onClicked: appWindow.openMedia(url, title)
 
             Column {
                 anchors {

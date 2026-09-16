@@ -213,6 +213,26 @@ bool AppSettings::hasLastNasSource() const
     return !m_lastNasHost.isEmpty() && !m_lastNasShare.isEmpty();
 }
 
+QString AppSettings::detachedCastDeviceName() const
+{
+    return m_detachedCastDeviceName;
+}
+
+QString AppSettings::detachedCastHost() const
+{
+    return m_detachedCastHost;
+}
+
+int AppSettings::detachedCastPort() const
+{
+    return m_detachedCastPort > 0 ? m_detachedCastPort : 8009;
+}
+
+bool AppSettings::hasDetachedCastSession() const
+{
+    return !m_detachedCastHost.isEmpty();
+}
+
 void AppSettings::setLastNasSource(const QString &title,
                                    const QString &host,
                                    int port,
@@ -281,6 +301,46 @@ void AppSettings::clearLastNasSource()
     scheduleSave();
 }
 
+void AppSettings::setDetachedCastSession(const QString &deviceName,
+                                         const QString &host,
+                                         int port)
+{
+    const QString cleanHost = cleanedText(host);
+    if (cleanHost.isEmpty()) {
+        return;
+    }
+
+    const QString cleanName = cleanedText(deviceName);
+    const int cleanPort = port > 0 ? port : 8009;
+    if (m_detachedCastDeviceName == cleanName
+            && m_detachedCastHost == cleanHost
+            && m_detachedCastPort == cleanPort) {
+        return;
+    }
+
+    m_detachedCastDeviceName = cleanName;
+    m_detachedCastHost = cleanHost;
+    m_detachedCastPort = cleanPort;
+    emit detachedCastSessionChanged();
+
+    // Persist immediately because this state is specifically needed after
+    // SailVideo has been closed while the receiver keeps playing.
+    save();
+}
+
+void AppSettings::clearDetachedCastSession()
+{
+    if (!hasDetachedCastSession() && m_detachedCastDeviceName.isEmpty()) {
+        return;
+    }
+
+    m_detachedCastDeviceName.clear();
+    m_detachedCastHost.clear();
+    m_detachedCastPort = 8009;
+    emit detachedCastSessionChanged();
+    save();
+}
+
 void AppSettings::resetToDefaults()
 {
     const bool fillChanged = m_videoFillMode != QLatin1String("fit");
@@ -289,6 +349,7 @@ void AppSettings::resetToDefaults()
     const bool videosChanged = m_nasShowOnlyVideos;
     const bool hiddenChanged = m_nasShowHiddenFiles;
     const bool lastNasChanged = hasLastNasSource();
+    const bool castSessionChanged = hasDetachedCastSession();
     const bool volumeChanged = m_defaultVolumePercent != 30;
     const bool brightnessChanged = m_defaultBrightnessPercent != 50;
 
@@ -307,6 +368,9 @@ void AppSettings::resetToDefaults()
     m_lastNasDomain.clear();
     m_lastNasUsername.clear();
     m_lastNasGuest = true;
+    m_detachedCastDeviceName.clear();
+    m_detachedCastHost.clear();
+    m_detachedCastPort = 8009;
 
     if (fillChanged) emit videoFillModeChanged();
     if (skipChanged) emit skipSecondsChanged();
@@ -316,6 +380,7 @@ void AppSettings::resetToDefaults()
     if (volumeChanged) emit defaultVolumePercentChanged();
     if (brightnessChanged) emit defaultBrightnessPercentChanged();
     if (lastNasChanged) emit lastNasSourceChanged();
+    if (castSessionChanged) emit detachedCastSessionChanged();
     scheduleSave();
 }
 
@@ -366,6 +431,12 @@ void AppSettings::load()
     m_lastNasDomain = cleanedText(root.value(QStringLiteral("lastNasDomain")).toString());
     m_lastNasUsername = cleanedText(root.value(QStringLiteral("lastNasUsername")).toString());
     m_lastNasGuest = root.value(QStringLiteral("lastNasGuest")).toBool(true);
+    m_detachedCastDeviceName = cleanedText(root.value(QStringLiteral("detachedCastDeviceName")).toString());
+    m_detachedCastHost = cleanedText(root.value(QStringLiteral("detachedCastHost")).toString());
+    m_detachedCastPort = root.value(QStringLiteral("detachedCastPort")).toInt(8009);
+    if (m_detachedCastPort <= 0) {
+        m_detachedCastPort = 8009;
+    }
 }
 
 void AppSettings::scheduleSave()
@@ -383,7 +454,7 @@ bool AppSettings::save() const
         return false;
     }
     QJsonObject root;
-    root.insert(QStringLiteral("version"), 2);
+    root.insert(QStringLiteral("version"), 3);
     root.insert(QStringLiteral("videoFillMode"), m_videoFillMode);
     root.insert(QStringLiteral("skipSeconds"), m_skipSeconds);
     root.insert(QStringLiteral("keepDisplayOn"), m_keepDisplayOn);
@@ -399,6 +470,9 @@ bool AppSettings::save() const
     root.insert(QStringLiteral("lastNasDomain"), m_lastNasDomain);
     root.insert(QStringLiteral("lastNasUsername"), m_lastNasUsername);
     root.insert(QStringLiteral("lastNasGuest"), m_lastNasGuest);
+    root.insert(QStringLiteral("detachedCastDeviceName"), m_detachedCastDeviceName);
+    root.insert(QStringLiteral("detachedCastHost"), m_detachedCastHost);
+    root.insert(QStringLiteral("detachedCastPort"), m_detachedCastPort);
 
     QSaveFile file(storagePath());
     if (!file.open(QIODevice::WriteOnly)) {

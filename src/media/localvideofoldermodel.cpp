@@ -108,6 +108,32 @@ int LocalVideoFolderModel::count() const
     return m_rows.size();
 }
 
+QString LocalVideoFolderModel::urlAt(int row) const
+{
+    if (!m_sourceModel || row < 0 || row >= m_rows.size()) {
+        return QString();
+    }
+
+    const int sourceRow = m_rows.at(row);
+    const QVector<LocalVideoModel::Entry> &entries = m_sourceModel->entries();
+    return sourceRow >= 0 && sourceRow < entries.size()
+            ? entries.at(sourceRow).url
+            : QString();
+}
+
+QString LocalVideoFolderModel::titleAt(int row) const
+{
+    if (!m_sourceModel || row < 0 || row >= m_rows.size()) {
+        return QString();
+    }
+
+    const int sourceRow = m_rows.at(row);
+    const QVector<LocalVideoModel::Entry> &entries = m_sourceModel->entries();
+    return sourceRow >= 0 && sourceRow < entries.size()
+            ? entries.at(sourceRow).title
+            : QString();
+}
+
 void LocalVideoFolderModel::rebuild()
 {
     QVector<int> rows;

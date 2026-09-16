@@ -15,6 +15,8 @@
 #include <QHostAddress>
 #include <QMimeDatabase>
 #include <QMimeType>
+#include <QNetworkAddressEntry>
+#include <QNetworkInterface>
 #include <QTcpSocket>
 #include <QUrl>
 #include <QUuid>
@@ -33,6 +35,8 @@ QByteArray reasonPhrase(int statusCode)
         return QByteArrayLiteral("Partial Content");
     case 400:
         return QByteArrayLiteral("Bad Request");
+    case 403:
+        return QByteArrayLiteral("Forbidden");
     case 404:
         return QByteArrayLiteral("Not Found");
     case 405:
@@ -108,12 +112,27 @@ QString mimeTypeForName(const QString &fileName)
             : QStringLiteral("application/octet-stream");
 }
 
+bool samePeerAddress(const QHostAddress &left, const QHostAddress &right)
+{
+    if (left == right) {
+        return true;
+    }
+
+    bool leftOk = false;
+    bool rightOk = false;
+    const quint32 leftV4 = left.toIPv4Address(&leftOk);
+    const quint32 rightV4 = right.toIPv4Address(&rightOk);
+    return leftOk && rightOk && leftV4 == rightV4;
+}
+
 } // namespace
 
 LocalFileStreamServer::LocalFileStreamServer(QObject *parent)
     : QObject(parent)
 {
     connect(&m_server, SIGNAL(newConnection()),
+            this, SLOT(handleNewConnection()));
+    connect(&m_lanServer, SIGNAL(newConnection()),
             this, SLOT(handleNewConnection()));
 }
 
@@ -130,6 +149,11 @@ void LocalFileStreamServer::setSmbBackend(SmbBackend *backend)
 bool LocalFileStreamServer::running() const
 {
     return m_server.isListening();
+}
+
+bool LocalFileStreamServer::lanRunning() const
+{
+    return m_lanServer.isListening();
 }
 
 QString LocalFileStreamServer::lastError() const
@@ -273,15 +297,81 @@ QString LocalFileStreamServer::streamUrlForSmbFile(const QString &host,
             .arg(encodedFileName);
 }
 
+QString LocalFileStreamServer::lanStreamUrlForLocalFile(const QString &urlOrPath,
+                                                          const QString &peerHost)
+{
+    const QString loopbackUrl = streamUrlForLocalFile(urlOrPath);
+    return loopbackUrl.isEmpty()
+            ? QString()
+            : lanUrlForLoopbackUrl(loopbackUrl, peerHost);
+}
+
+QString LocalFileStreamServer::lanStreamUrlForSmbFile(const QString &host,
+                                                      int port,
+                                                      const QString &share,
+                                                      const QString &path,
+                                                      const QString &domain,
+                                                      const QString &username,
+                                                      const QString &password,
+                                                      bool guest,
+                                                      qint64 size,
+                                                      const QString &fileName,
+                                                      const QString &peerHost)
+{
+    const QString loopbackUrl = streamUrlForSmbFile(host,
+                                                    port,
+                                                    share,
+                                                    path,
+                                                    domain,
+                                                    username,
+                                                    password,
+                                                    guest,
+                                                    size,
+                                                    fileName);
+    return loopbackUrl.isEmpty()
+            ? QString()
+            : lanUrlForLoopbackUrl(loopbackUrl, peerHost);
+}
+
 bool LocalFileStreamServer::isLocalFile(const QString &urlOrPath) const
 {
     return !localFilePath(urlOrPath).isEmpty();
 }
 
+void LocalFileStreamServer::stopLanSharing()
+{
+    const QList<QTcpSocket *> sockets = m_lanClients.values();
+    for (int i = 0; i < sockets.size(); ++i) {
+        QTcpSocket *socket = sockets.at(i);
+        if (!socket) {
+            continue;
+        }
+        m_pendingRequests.remove(socket);
+        closeTransfer(socket);
+        socket->disconnectFromHost();
+        socket->deleteLater();
+    }
+    m_lanClients.clear();
+    m_lanAllowedPeer = QHostAddress();
+
+    if (m_lanServer.isListening()) {
+        m_lanServer.close();
+        emit lanRunningChanged();
+        qInfo() << "SailVideo Cast bridge: LAN listener stopped";
+    }
+}
+
 void LocalFileStreamServer::clear()
 {
-    QList<QTcpSocket *> sockets = m_pendingRequests.keys();
-    sockets.append(m_transfers.keys());
+    stopLanSharing();
+
+    QSet<QTcpSocket *> uniqueSockets;
+    const QList<QTcpSocket *> pending = m_pendingRequests.keys();
+    const QList<QTcpSocket *> transfers = m_transfers.keys();
+    for (int i = 0; i < pending.size(); ++i) uniqueSockets.insert(pending.at(i));
+    for (int i = 0; i < transfers.size(); ++i) uniqueSockets.insert(transfers.at(i));
+
+    const QList<QTcpSocket *> sockets = uniqueSockets.values();
     for (int i = 0; i < sockets.size(); ++i) {
         if (sockets.at(i)) {
             sockets.at(i)->disconnectFromHost();
@@ -300,10 +390,32 @@ void LocalFileStreamServer::clear()
 
 void LocalFileStreamServer::handleNewConnection()
 {
-    while (m_server.hasPendingConnections()) {
-        QTcpSocket *socket = m_server.nextPendingConnection();
+    QTcpServer *server = qobject_cast<QTcpServer *>(sender());
+    if (!server) {
+        return;
+    }
+
+    const bool lanConnection = server == &m_lanServer;
+    while (server->hasPendingConnections()) {
+        QTcpSocket *socket = server->nextPendingConnection();
         if (!socket) {
             continue;
+        }
+
+        if (lanConnection
+                && !m_lanAllowedPeer.isNull()
+                && !samePeerAddress(socket->peerAddress(), m_lanAllowedPeer)) {
+            qWarning() << "SailVideo Cast bridge: rejected unexpected LAN peer"
+                       << socket->peerAddress().toString();
+            sendSimpleResponse(socket, 403, reasonPhrase(403));
+            socket->deleteLater();
+            continue;
+        }
+
+        if (lanConnection) {
+            m_lanClients.insert(socket);
+            qInfo() << "SailVideo Cast bridge: Chromecast connected from"
+                    << socket->peerAddress().toString();
         }
 
         connect(socket, SIGNAL(readyRead()),
@@ -407,6 +519,7 @@ void LocalFileStreamServer::cleanupClient()
     }
 
     m_pendingRequests.remove(socket);
+    m_lanClients.remove(socket);
     closeTransfer(socket);
     socket->deleteLater();
 }
@@ -425,6 +538,113 @@ bool LocalFileStreamServer::ensureListening()
 
     emit runningChanged();
     return true;
+}
+
+bool LocalFileStreamServer::ensureLanListening(const QString &peerHost)
+{
+    const QHostAddress peer(peerHost.trimmed());
+    if (peer.isNull() || peer.protocol() != QAbstractSocket::IPv4Protocol) {
+        setLastError(tr("The selected Chromecast does not have a usable IPv4 address."));
+        return false;
+    }
+
+    if (m_lanServer.isListening() && m_lanAllowedPeer != peer) {
+        stopLanSharing();
+    }
+    m_lanAllowedPeer = peer;
+
+    if (m_lanServer.isListening()) {
+        return true;
+    }
+
+    if (!m_lanServer.listen(QHostAddress::AnyIPv4, 0)) {
+        setLastError(tr("Could not start the Chromecast HTTP bridge: %1")
+                     .arg(m_lanServer.errorString()));
+        return false;
+    }
+
+    emit lanRunningChanged();
+    qInfo() << "SailVideo Cast bridge: listening on LAN port"
+            << m_lanServer.serverPort()
+            << "for Chromecast" << peer.toString();
+    return true;
+}
+
+QHostAddress LocalFileStreamServer::lanAddressForPeer(const QHostAddress &peer) const
+{
+    QHostAddress firstUsable;
+    QHostAddress wifiAddress;
+
+    const QList<QNetworkInterface> interfaces = QNetworkInterface::allInterfaces();
+    for (int i = 0; i < interfaces.size(); ++i) {
+        const QNetworkInterface iface = interfaces.at(i);
+        const QNetworkInterface::InterfaceFlags flags = iface.flags();
+        if (!(flags & QNetworkInterface::IsUp)
+                || !(flags & QNetworkInterface::IsRunning)
+                || (flags & QNetworkInterface::IsLoopBack)) {
+            continue;
+        }
+
+        const QString ifaceName = iface.name().toLower();
+        const bool wifiLike = ifaceName.contains(QStringLiteral("wlan"))
+                || ifaceName.contains(QStringLiteral("wifi"));
+        const QList<QNetworkAddressEntry> entries = iface.addressEntries();
+        for (int j = 0; j < entries.size(); ++j) {
+            const QHostAddress ip = entries.at(j).ip();
+            if (ip.protocol() != QAbstractSocket::IPv4Protocol || ip.isLoopback()) {
+                continue;
+            }
+
+            if (firstUsable.isNull()) firstUsable = ip;
+            if (wifiLike && wifiAddress.isNull()) wifiAddress = ip;
+
+            const QHostAddress mask = entries.at(j).netmask();
+            if (!peer.isNull() && mask.protocol() == QAbstractSocket::IPv4Protocol) {
+                const quint32 maskValue = mask.toIPv4Address();
+                if ((peer.toIPv4Address() & maskValue)
+                        == (ip.toIPv4Address() & maskValue)) {
+                    return ip;
+                }
+            }
+        }
+    }
+
+    return !wifiAddress.isNull() ? wifiAddress : firstUsable;
+}
+
+QString LocalFileStreamServer::lanUrlForLoopbackUrl(const QString &loopbackUrl,
+                                                    const QString &peerHost)
+{
+    if (!ensureLanListening(peerHost)) {
+        return QString();
+    }
+
+    const QHostAddress peer(peerHost.trimmed());
+    const QHostAddress localAddress = lanAddressForPeer(peer);
+    if (localAddress.isNull()) {
+        setLastError(tr("Could not determine the phone's Wi-Fi address for Chromecast."));
+        stopLanSharing();
+        return QString();
+    }
+
+    const QUrl source(loopbackUrl);
+    const QString path = source.path();
+    if (path.isEmpty()) {
+        setLastError(tr("Could not prepare the Chromecast stream URL."));
+        stopLanSharing();
+        return QString();
+    }
+
+    QUrl lanUrl;
+    lanUrl.setScheme(QStringLiteral("http"));
+    lanUrl.setHost(localAddress.toString());
+    lanUrl.setPort(int(m_lanServer.serverPort()));
+    lanUrl.setPath(path);
+
+    setLastError(QString());
+    qInfo() << "SailVideo Cast bridge: prepared LAN URL on"
+            << localAddress.toString() << m_lanServer.serverPort();
+    return lanUrl.toString();
 }
 
 QString LocalFileStreamServer::localFilePath(const QString &urlOrPath) const
@@ -537,6 +757,13 @@ void LocalFileStreamServer::handleRequest(QTcpSocket *socket, const QByteArray &
         partial = true;
     }
 
+    if (m_lanClients.contains(socket)) {
+        qInfo() << "SailVideo Cast bridge:" << method
+                << (partial ? "range" : "full")
+                << start << end << "of" << entry.size
+                << "mime" << entry.mimeType;
+    }
+
     startTransfer(socket, entry, start, end, partial, method == QByteArrayLiteral("HEAD"));
 }
 
@@ -548,6 +775,7 @@ void LocalFileStreamServer::sendSimpleResponse(QTcpSocket *socket,
     QByteArray response;
     response += "HTTP/1.1 " + QByteArray::number(statusCode) + " " + reason + "\r\n";
     response += "Connection: close\r\n";
+    response += "Access-Control-Allow-Origin: *\r\n";
     response += "Content-Type: text/plain; charset=utf-8\r\n";
     response += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
     response += "\r\n";
@@ -561,6 +789,8 @@ void LocalFileStreamServer::sendRangeNotSatisfiable(QTcpSocket *socket, qint64 s
     QByteArray response;
     response += "HTTP/1.1 416 Range Not Satisfiable\r\n";
     response += "Accept-Ranges: bytes\r\n";
+    response += "Access-Control-Allow-Origin: *\r\n";
+    response += "Access-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges\r\n";
     response += "Content-Range: bytes */" + QByteArray::number(size) + "\r\n";
     response += "Content-Length: 0\r\n";
     response += "Connection: close\r\n";
@@ -644,6 +874,8 @@ void LocalFileStreamServer::startTransfer(QTcpSocket *socket,
     response += "HTTP/1.1 " + QByteArray::number(statusCode) + " "
             + reasonPhrase(statusCode) + "\r\n";
     response += "Accept-Ranges: bytes\r\n";
+    response += "Access-Control-Allow-Origin: *\r\n";
+    response += "Access-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges\r\n";
     response += "Content-Type: " + entry.mimeType.toUtf8() + "\r\n";
     response += "Content-Length: " + QByteArray::number(contentLength) + "\r\n";
     if (partial) {

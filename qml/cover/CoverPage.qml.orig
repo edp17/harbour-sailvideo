@@ -51,34 +51,23 @@ CoverBackground {
         truncationMode: TruncationMode.Fade
     }
 
-    Label {
-        visible: appWindow.castMode
-        anchors {
-            left: parent.left
-            right: parent.right
-            bottom: parent.bottom
-            bottomMargin: Theme.paddingLarge * 3
-            margins: Theme.paddingLarge
-        }
-        text: qsTr("Casting to %1").arg(
-                  castManager.deviceName.length > 0
-                  ? castManager.deviceName
-                  : appWindow.castLastDeviceName)
-        horizontalAlignment: Text.AlignHCenter
-        color: Theme.highlightColor
-        font.pixelSize: Theme.fontSizeExtraSmall
-        truncationMode: TruncationMode.Fade
-    }
-
     CoverActionList {
         enabled: appWindow.hasMedia
 
         CoverAction {
-            iconSource: appWindow.playbackIsPlaying()
+            iconSource: appWindow.player.playbackState === MediaPlayer.PlayingState
                         ? "image://theme/icon-cover-pause"
                         : "image://theme/icon-cover-play"
 
-            onTriggered: appWindow.togglePlayback()
+            onTriggered: {
+                if (appWindow.player.playbackState === MediaPlayer.PlayingState) {
+                    appWindow.player.pause()
+                } else if (appWindow.playerSuspended) {
+                    appWindow.resumeCurrentMedia()
+                } else {
+                    appWindow.player.play()
+                }
+            }
         }
     }
 }

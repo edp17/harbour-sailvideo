@@ -1,6 +1,6 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
-Version:    1.0
+Version:    1.1.0.1
 Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
@@ -24,7 +24,7 @@ Requires: nemo-qml-plugin-thumbnailer-qt5
 
 %description
 SailVideo is a native Sailfish OS video player designed for local files,
-HTTP/HTTPS media URLs, and SMB/NAS media through a localhost Range bridge.
+HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 
 %prep
 %setup -q
@@ -49,6 +49,7 @@ HTTP/HTTPS media URLs, and SMB/NAS media through a localhost Range bridge.
 %doc docs/PLAYBACK_HISTORY.md
 %doc docs/RELEASE_TESTING.md
 %doc docs/NETWORK_DISCOVERY.md
+%doc docs/CHROMECAST.md
 %{_bindir}/harbour-sailvideo
 %{_libdir}/harbour-sailvideo
 %{_datadir}/applications/harbour-sailvideo.desktop
@@ -56,6 +57,31 @@ HTTP/HTTPS media URLs, and SMB/NAS media through a localhost Range bridge.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Wed Sep 16 2026 edp17 <edp17@protonmail.com> - 1.1.0.1-1
+- Start Chromecast video playback at SailVideo's current volume instead of receiver maximum volume
+- Preserve the exact remote position across Stop media -> Start / continue
+- Simplify picture-casting controls by hiding video-only mute/stop/detach actions
+- Add Return to picture/player workflow from Chromecast and Main pages
+- Add unified SMB folder media navigation so Cast previous/next traverses mixed picture/video folders
+- Add Cast picture slideshow that continues while navigating away from the picture page
+- Keep picture slideshows image-only while manual Cast previous/next follows the complete folder media order
+- Improve Cast workflow state handling and diagnostics
+
+* Wed Sep 16 2026 edp17 <edp17@protonmail.com> - 1.1-1
+- Add native Google Chromecast discovery using mDNS
+- Add Cast V2 TLS sender with built-in protobuf envelope framing
+- Launch and control Google Default Media Receiver without external protobuf/Avahi dependencies
+- Cast direct HTTP/HTTPS sources and expose local/SMB media through a LAN HTTP Range bridge
+- Reuse the SailVideo player UI for remote play/pause, seek, skip, volume and queue controls
+- Add Cast device/status UI, proper receiver-session disconnect and remote position tracking
+- Remember discovered Chromecast devices and provide explicit refresh/retry actions
+- Add stop/continue without requiring a disconnect and recast
+- Rejoin an ongoing Default Media Receiver session after SailVideo restarts where possible
+- Add Chromecast display for SMB/NAS pictures, including previous/next and slideshow changes
+- Improve local/SMB previous-next queue matching
+- Keep direct Cast playback running when SailVideo detaches/exits where the receiver can access the source independently
+- Add Chromecast diagnostics and device-test documentation
+
 * Tue Sep 15 2026 edp17 <edp17@protonmail.com> - 1.0-1
 - First public SailVideo release
 - Add native local-video library grouped by folder with Sailfish thumbnails

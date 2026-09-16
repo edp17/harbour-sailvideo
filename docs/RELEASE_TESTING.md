@@ -414,3 +414,125 @@ local category browsing, seeking, pause/resume, rotation, cover controls,
 unsupported/missing-file errors, SMB browsing/playback/resume, saved credentials,
 URL-source persistence/playback, player scaling, volume/brightness gestures and
 NAS picture browsing.
+
+
+## SailVideo 1.1 Chromecast first device test
+
+Use a known-good video that already plays correctly in SailVideo.
+
+1. Launch SailVideo from the icon and from the terminal.
+2. Play a local video, tap Cast, and confirm the Chromecast appears.
+3. Select the Chromecast and confirm the TV starts near the phone's current
+   playback position.
+4. Confirm the player page clearly identifies the active Cast device.
+5. Test remote play/pause, seek bar, restart, skip backward and skip forward.
+6. For an SMB folder with several videos, test previous/next while casting.
+7. Test right-side volume swipe and mute from the Chromecast page.
+8. Use `Disconnect and resume on phone`; confirm the Cast receiver closes on
+   the TV and phone playback resumes near the remote position.
+9. Start Cast again and use `Leave playing on TV`; confirm the TV continues.
+10. Repeat with an HTTP/HTTPS source and confirm the receiver receives the
+    original URL rather than a localhost URL.
+11. Repeat with an SMB/NAS video; confirm terminal logs show a LAN bridge URL
+    and HTTP GET/HEAD/Range requests from the Chromecast.
+12. With SMB casting, seek near the beginning, middle and end of a large video.
+13. Verify audio using a known-good H.264/AAC MP4 or another SailVideo/NAS video
+    with confirmed audio.
+14. Confirm ordinary local playback, NAS playback, URL playback, rotation and
+    cover controls still work when Cast is not active.
+
+Useful logs:
+
+```text
+SailVideo Cast:
+SailVideo Cast bridge:
+```
+
+
+## SailVideo 1.1 Chromecast second device test
+
+Run these after the first Chromecast milestone still passes:
+
+1. Open Cast after a Chromecast has already been discovered. Confirm the
+   remembered device appears immediately and a new scan does not start.
+2. Use the pulley `Scan for Chromecast devices` action. Confirm the known
+   receiver is refreshed and additional receivers would be added.
+3. With the receiver deliberately unavailable, tap its remembered entry.
+   Confirm a connection error and `Retry connection` action are shown rather
+   than silently removing the device.
+4. Cast a video, press `Stop media`, and confirm TV playback stops while the
+   receiver remains connected. Confirm the button changes to `Start / continue`
+   and resumes/reloads the same video without disconnecting first.
+5. For a direct HTTP/HTTPS cast, choose `Leave playing on TV`, close SailVideo,
+   reopen it, and confirm SailVideo opens the Chromecast page and rejoins the
+   running receiver/media session without sending another LOAD.
+6. Repeat the previous test while the Cast media is paused.
+7. Confirm `Disconnect and resume on phone` still terminates the receiver
+   session with receiver namespace STOP and resumes video near the remote
+   position.
+8. Open an SMB/NAS folder containing several videos from both the first/middle
+   and last items. Confirm previous/next availability always corresponds to the
+   actual neighbouring videos.
+9. Repeat previous/next using the native Local videos folder/category page.
+10. Open an SMB/NAS JPEG or PNG in the picture viewer, tap Cast, and confirm the
+    picture is displayed on TV.
+11. While displaying a picture, use previous and next. Confirm the TV follows
+    each picture change.
+12. Start the SailVideo picture slideshow and confirm successive pictures are
+    also shown on TV.
+13. Stop the displayed picture from the Chromecast page, then use
+    `Start / continue` and confirm the same picture returns.
+14. Disconnect picture casting and confirm the Cast receiver closes without
+    trying to start video playback on the phone.
+15. Re-test ordinary local/NAS/URL playback and local picture viewing with no
+    Chromecast active.
+
+For restart/rejoin testing, direct HTTP/HTTPS media is the authoritative case.
+Local/SMB Cast media depends on SailVideo's LAN HTTP bridge, so closing the app
+removes the server that the Chromecast is reading from.
+
+
+## SailVideo 1.1.0.1 Chromecast workflow tests
+
+### Video volume and stop/continue
+
+1. Set SailVideo playback volume to a non-100 value such as 30%.
+2. Start casting a known-good video.
+3. Confirm Chromecast starts at approximately the same receiver volume and
+   does not jump to 100%.
+4. Let the video play for at least 30 seconds.
+5. On the Chromecast page choose `Stop media`.
+6. Confirm the receiver remains connected and `Start / continue` appears.
+7. Choose `Start / continue`.
+8. Confirm playback resumes near the stopped position rather than from 0:00.
+
+### Picture controls and return workflow
+
+1. Cast an SMB picture.
+2. Confirm the Chromecast page does not show Mute, Stop media or Leave playing
+   on TV.
+3. Confirm `Return to picture` returns to the current picture viewer.
+4. Go back to Main while the picture remains on TV.
+5. Tap the `Now casting` card and confirm the current picture workflow opens
+   again without browsing the folder or recasting.
+
+### Folder workflow matrix
+
+Test three SMB folders:
+
+1. Video-only folder:
+   - Cast a middle video.
+   - Confirm previous/next follow all videos in the displayed folder order.
+
+2. Picture-only folder:
+   - Cast a middle picture.
+   - Confirm previous/next follow all pictures.
+   - Start slideshow; confirm it advances automatically and wraps at the end.
+   - Navigate to Main/Cast page while slideshow runs and confirm TV continues
+     to advance.
+
+3. Mixed picture/video folder:
+   - Start with a picture and use Next/Previous across a neighbouring video.
+   - Start with a video and use Next/Previous across a neighbouring picture.
+   - Confirm media type switches on the TV without reconnecting Chromecast.
+   - Confirm picture slideshow skips videos and cycles only through pictures.

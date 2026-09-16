@@ -31,6 +31,10 @@ class AppSettings : public QObject
     Q_PROPERTY(QString lastNasUsername READ lastNasUsername NOTIFY lastNasSourceChanged)
     Q_PROPERTY(bool lastNasGuest READ lastNasGuest NOTIFY lastNasSourceChanged)
     Q_PROPERTY(bool hasLastNasSource READ hasLastNasSource NOTIFY lastNasSourceChanged)
+    Q_PROPERTY(QString detachedCastDeviceName READ detachedCastDeviceName NOTIFY detachedCastSessionChanged)
+    Q_PROPERTY(QString detachedCastHost READ detachedCastHost NOTIFY detachedCastSessionChanged)
+    Q_PROPERTY(int detachedCastPort READ detachedCastPort NOTIFY detachedCastSessionChanged)
+    Q_PROPERTY(bool hasDetachedCastSession READ hasDetachedCastSession NOTIFY detachedCastSessionChanged)
 
 public:
     explicit AppSettings(const QString &storageDirectory = QString(), QObject *parent = nullptr);
@@ -62,6 +66,11 @@ public:
     bool lastNasGuest() const;
     bool hasLastNasSource() const;
 
+    QString detachedCastDeviceName() const;
+    QString detachedCastHost() const;
+    int detachedCastPort() const;
+    bool hasDetachedCastSession() const;
+
     Q_INVOKABLE void setLastNasSource(const QString &title,
                                       const QString &host,
                                       int port,
@@ -71,6 +80,10 @@ public:
                                       const QString &username,
                                       bool guest);
     Q_INVOKABLE void clearLastNasSource();
+    Q_INVOKABLE void setDetachedCastSession(const QString &deviceName,
+                                            const QString &host,
+                                            int port);
+    Q_INVOKABLE void clearDetachedCastSession();
     Q_INVOKABLE void resetToDefaults();
     Q_INVOKABLE QString videoFillModeDescription() const;
 
@@ -87,6 +100,7 @@ signals:
     void defaultVolumePercentChanged();
     void defaultBrightnessPercentChanged();
     void lastNasSourceChanged();
+    void detachedCastSessionChanged();
 
 private:
     void load();
@@ -114,6 +128,9 @@ private:
     QString m_lastNasDomain;
     QString m_lastNasUsername;
     bool m_lastNasGuest = true;
+    QString m_detachedCastDeviceName;
+    QString m_detachedCastHost;
+    int m_detachedCastPort = 8009;
 };
 
 #endif // APPSETTINGS_H

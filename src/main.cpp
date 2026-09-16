@@ -26,6 +26,8 @@
 #include <sailfishapp.h>
 
 #include "application/appsettings.h"
+#include "cast/castdevicemodel.h"
+#include "cast/castmanager.h"
 #include "media/playbackhistorymodel.h"
 #include "media/localvideomodel.h"
 #include "media/localvideocategorymodel.h"
@@ -80,6 +82,8 @@ int main(int argc, char *argv[])
     LocalVideoModel localVideos;
     LocalVideoCategoryModel localVideoCategories(&localVideos);
     AppSettings appSettings(nasSources.storageDirectory());
+    CastDeviceModel castDeviceModel(nasSources.storageDirectory());
+    CastManager castManager;
     QObject::connect(app.data(), &QGuiApplication::aboutToQuit,
                      &appSettings, [&appSettings]() { appSettings.save(); });
     SmbBackend smbBackend;
@@ -131,9 +135,16 @@ int main(int argc, char *argv[])
     view->rootContext()->setContextProperty(
         QStringLiteral("urlDownloadCache"),
         &urlDownloadCache);
+    view->rootContext()->setContextProperty(
+        QStringLiteral("castDeviceModel"),
+        &castDeviceModel);
+    view->rootContext()->setContextProperty(
+        QStringLiteral("castManager"),
+        &castManager);
 
     qInfo() << "SailVideo: URL download cache helper exposed";
     qInfo() << "SailVideo: URL sources saved to" << networkSources.storagePath();
+    qInfo() << "SailVideo: Chromecast sender support enabled";
 
     view->setSource(SailfishApp::pathTo(QStringLiteral("qml/harbour-sailvideo.qml")));
     view->show();

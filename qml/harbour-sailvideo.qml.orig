@@ -59,33 +59,6 @@ ApplicationWindow {
     property bool hasPreviousPicture: pictureQueueIndex > 0
     property bool hasNextPicture: pictureQueueIndex >= 0 && pictureQueueIndex < pictureQueue.length - 1
 
-    // Unified SMB folder media queue. The specialised video/picture queues
-    // remain useful for video-only playback and picture-only slideshows, while
-    // this queue lets Cast previous/next move naturally through mixed folders.
-    property var folderMediaQueue: []
-    property int folderMediaQueueIndex: -1
-    property bool hasPreviousFolderMedia: folderMediaQueueIndex > 0
-    property bool hasNextFolderMedia: folderMediaQueueIndex >= 0
-                                      && folderMediaQueueIndex < folderMediaQueue.length - 1
-    property bool castFolderNavigationActive: castMode
-                                              && folderMediaQueueIndex >= 0
-                                              && folderMediaQueue.length > 0
-    property bool hasPreviousVideoControl: castFolderNavigationActive
-                                           ? hasPreviousFolderMedia
-                                           : hasPreviousVideo
-    property bool hasNextVideoControl: castFolderNavigationActive
-                                       ? hasNextFolderMedia
-                                       : hasNextVideo
-    property bool hasPreviousPictureControl: castFolderNavigationActive
-                                             ? hasPreviousFolderMedia
-                                             : hasPreviousPicture
-    property bool hasNextPictureControl: castFolderNavigationActive
-                                         ? hasNextFolderMedia
-                                         : hasNextPicture
-    property bool castPictureSlideshowRunning: false
-    property bool remoteQueueSwitch: false
-    property bool keepCastControlPageDuringQueueSwitch: false
-
     property string currentPictureTitle: ""
     property string currentPictureSource: ""
     property string currentPictureKind: ""
@@ -476,7 +449,6 @@ ApplicationWindow {
         }
 
         var startPosition = 0
-        var initialCastVolume = picture ? -1 : playbackVolumePercent
         var mediaTitle = picture ? currentPictureTitle : currentMediaTitle
         if (!picture) {
             startPosition = playbackPosition()
@@ -517,8 +489,7 @@ ApplicationWindow {
                     remoteUrl,
                     contentType,
                     mediaTitle,
-                    startPosition,
-                    initialCastVolume)
+                    startPosition)
         if (!started) {
             castRequested = false
             if (castUsesLanBridge) {
@@ -563,70 +534,7 @@ ApplicationWindow {
                                         0)
     }
 
-
-    function castCurrentVideoToConnectedDevice(startPositionMs) {
-        if (castTargetKind !== "video"
-                || !castManager.connected
-                || !hasMedia) {
-            return false
-        }
-
-        var remoteUrl = castUrlForCurrentMedia(castManager.host)
-        if (!remoteUrl || remoteUrl.length === 0) {
-            playbackError = localFileStreamServer.lastError.length > 0
-                    ? localFileStreamServer.lastError
-                    : qsTr("This video cannot currently be exposed to Chromecast.")
-            playbackStatus = playbackError
-            return false
-        }
-
-        var startPosition = startPositionMs !== undefined && startPositionMs !== null
-                ? Math.max(0, Math.round(startPositionMs))
-                : Math.max(0, lastKnownPosition)
-
-        if (mediaPlayer.playbackState === MediaPlayer.PlayingState) {
-            mediaPlayer.pause()
-        }
-
-        lastKnownPosition = startPosition
-        var contentType = castManager.contentTypeForUrl(remoteUrl, currentMediaTitle)
-        return castManager.replaceMedia(remoteUrl,
-                                        contentType,
-                                        currentMediaTitle,
-                                        startPosition)
-    }
-
-    function returnToActiveCastMedia() {
-        if (!castMode) {
-            return false
-        }
-
-        var picture = castTargetKind === "picture" || castManager.imageMedia
-        if (picture && currentPictureSource && currentPictureSource.length > 0) {
-            if (!pageStack.currentPage
-                    || pageStack.currentPage.objectName !== "pictureViewerPage") {
-                pageStack.push(Qt.resolvedUrl("pages/PictureViewerPage.qml"))
-            }
-            return true
-        }
-
-        if (!picture && hasMedia) {
-            if (!pageStack.currentPage
-                    || pageStack.currentPage.objectName !== "playerPage") {
-                pageStack.push(Qt.resolvedUrl("pages/PlayerPage.qml"))
-            }
-            return true
-        }
-
-        if (!pageStack.currentPage
-                || pageStack.currentPage.objectName !== "castDevicesPage") {
-            pageStack.push(Qt.resolvedUrl("pages/CastDevicesPage.qml"))
-        }
-        return false
-    }
-
     function completeCastDisconnectOnly() {
-        castPictureSlideshowRunning = false
         castRequested = false
         castResumeLocalAfterDisconnect = false
         castDisconnectOnly = false
@@ -640,7 +548,6 @@ ApplicationWindow {
     }
 
     function completeCastReturnToPhone() {
-        castPictureSlideshowRunning = false
         var target = Math.max(0, castReturnPosition)
         castRequested = false
         castResumeLocalAfterDisconnect = false
@@ -1002,11 +909,6 @@ ApplicationWindow {
         pictureQueueIndex = -1
     }
 
-    function clearFolderMediaQueue() {
-        folderMediaQueue = []
-        folderMediaQueueIndex = -1
-    }
-
     function normalizedQueuePath(value) {
         var text = cleanedValue(value).replace(/\\/g, "/")
         while (text.indexOf("//") >= 0) {
@@ -1028,8 +930,6 @@ ApplicationWindow {
     }
 
     function setLocalPlaybackQueue(model, selectedIndex) {
-        clearPictureQueue()
-        clearFolderMediaQueue()
         var queue = []
         var selected = -1
 
@@ -1107,215 +1007,6 @@ ApplicationWindow {
 
         pictureQueue = queue
         pictureQueueIndex = selected
-    }
-
-
-    function setSmbFolderMediaQueueFromModel(model, selectedPath, host, port, share, domain, username, password, guest) {
-        var queue = []
-        var selected = -1
-        var cleanSelectedPath = normalizedQueuePath(selectedPath)
-        var selectedLeaf = queuePathLeaf(selectedPath)
-
-        if (!model || model.count === undefined) {
-            clearFolderMediaQueue()
-            return
-        }
-
-        for (var i = 0; i < model.count; ++i) {
-            var entry = model.get(i)
-            if (!entry || entry.isDirectory === true || entry.isDirectory === 1) {
-                continue
-            }
-
-            var imageEntry = entry.isImage === true
-                    || entry.isImage === 1
-                    || smbBackend.isLikelyImageFile(entry.name)
-            var videoEntry = entry.isVideo === true
-                    || entry.isVideo === 1
-                    || smbBackend.isLikelyVideoFile(entry.name)
-            if (!imageEntry && !videoEntry) {
-                continue
-            }
-
-            var rawPath = cleanedValue(entry.path)
-            var cleanPath = normalizedQueuePath(rawPath)
-            var item = {
-                mediaType: imageEntry ? "picture" : "video",
-                kind: "smb",
-                host: cleanedValue(host),
-                port: port > 0 ? port : 445,
-                share: cleanedValue(share),
-                path: rawPath,
-                domain: cleanedValue(domain),
-                username: cleanedValue(username),
-                password: password || "",
-                guest: guest === true,
-                size: entry.size > 0 ? entry.size : 0,
-                title: cleanedValue(entry.name)
-            }
-
-            if (cleanPath === cleanSelectedPath
-                    || (selected < 0
-                        && selectedLeaf.length > 0
-                        && queuePathLeaf(cleanPath) === selectedLeaf)) {
-                selected = queue.length
-            }
-            queue.push(item)
-        }
-
-        folderMediaQueue = queue
-        folderMediaQueueIndex = selected
-    }
-
-    function queueIndexForPath(queue, path) {
-        var cleanPath = normalizedQueuePath(path)
-        var leaf = queuePathLeaf(path)
-        for (var i = 0; i < queue.length; ++i) {
-            var item = queue[i]
-            if (!item || !item.path) {
-                continue
-            }
-            var candidate = normalizedQueuePath(item.path)
-            if (candidate === cleanPath
-                    || (leaf.length > 0 && queuePathLeaf(candidate) === leaf)) {
-                return i
-            }
-        }
-        return -1
-    }
-
-    function syncSmbQueueIndices(path, mediaType) {
-        var folderIndex = queueIndexForPath(folderMediaQueue, path)
-        if (folderIndex >= 0) {
-            folderMediaQueueIndex = folderIndex
-        }
-
-        if (mediaType === "picture") {
-            var pictureIndex = queueIndexForPath(pictureQueue, path)
-            if (pictureIndex >= 0) {
-                pictureQueueIndex = pictureIndex
-            }
-        } else if (mediaType === "video") {
-            var videoIndex = queueIndexForPath(playbackQueue, path)
-            if (videoIndex >= 0) {
-                playbackQueueIndex = videoIndex
-            }
-        }
-    }
-
-    function openFolderMediaQueueIndex(index, stayOnCastPage) {
-        if (index < 0 || index >= folderMediaQueue.length) {
-            return false
-        }
-
-        var item = folderMediaQueue[index]
-        if (!item || item.kind !== "smb") {
-            return false
-        }
-
-        var wasCasting = castMode && castManager.connected
-        folderMediaQueueIndex = index
-        keepCastControlPageDuringQueueSwitch = stayOnCastPage === true
-        remoteQueueSwitch = wasCasting
-
-        if (item.mediaType === "picture") {
-            castTargetKind = "picture"
-            var pictureOpened = openSmbPicture(item.host, item.port, item.share, item.path,
-                                               item.domain, item.username, item.password,
-                                               item.guest, item.size, item.title)
-            remoteQueueSwitch = false
-            keepCastControlPageDuringQueueSwitch = false
-            return pictureOpened
-        }
-
-        castPictureSlideshowRunning = false
-        castTargetKind = "video"
-        var videoOpened = openSmbFile(item.host, item.port, item.share, item.path,
-                                      item.domain, item.username, item.password,
-                                      item.guest, item.size, item.title, 0)
-        remoteQueueSwitch = false
-        keepCastControlPageDuringQueueSwitch = false
-
-        if (videoOpened && wasCasting) {
-            return castCurrentVideoToConnectedDevice(0)
-        }
-        return videoOpened
-    }
-
-    function showPreviousVideoControl() {
-        if (castFolderNavigationActive) {
-            return openFolderMediaQueueIndex(folderMediaQueueIndex - 1, false)
-        }
-        return playPreviousVideo()
-    }
-
-    function showNextVideoControl() {
-        if (castFolderNavigationActive) {
-            return openFolderMediaQueueIndex(folderMediaQueueIndex + 1, false)
-        }
-        return playNextVideo()
-    }
-
-    function showPreviousPictureControl() {
-        castPictureSlideshowRunning = false
-        if (castFolderNavigationActive) {
-            return openFolderMediaQueueIndex(folderMediaQueueIndex - 1, false)
-        }
-        return showPreviousPicture()
-    }
-
-    function showNextPictureControl() {
-        castPictureSlideshowRunning = false
-        if (castFolderNavigationActive) {
-            return openFolderMediaQueueIndex(folderMediaQueueIndex + 1, false)
-        }
-        return showNextPicture()
-    }
-
-    function showPreviousCastMediaFromControlPage() {
-        castPictureSlideshowRunning = false
-        if (castFolderNavigationActive) {
-            return openFolderMediaQueueIndex(folderMediaQueueIndex - 1, true)
-        }
-        if (castTargetKind === "picture" || castManager.imageMedia) {
-            return showPreviousPicture()
-        }
-        return playPreviousVideo()
-    }
-
-    function showNextCastMediaFromControlPage() {
-        castPictureSlideshowRunning = false
-        if (castFolderNavigationActive) {
-            return openFolderMediaQueueIndex(folderMediaQueueIndex + 1, true)
-        }
-        if (castTargetKind === "picture" || castManager.imageMedia) {
-            return showNextPicture()
-        }
-        return playNextVideo()
-    }
-
-    function advanceCastPictureSlideshow() {
-        if (!castPictureSlideshowRunning
-                || !castMode
-                || !(castTargetKind === "picture" || castManager.imageMedia)
-                || pictureQueue.length < 2) {
-            castPictureSlideshowRunning = false
-            return false
-        }
-
-        if (pictureQueueIndex < 0) {
-            pictureQueueIndex = queueIndexForPath(pictureQueue, currentPictureSmbPath)
-        }
-
-        var nextIndex = pictureQueueIndex + 1
-        if (nextIndex >= pictureQueue.length) {
-            nextIndex = 0
-        }
-
-        keepCastControlPageDuringQueueSwitch = true
-        var advanced = openPictureQueueIndex(nextIndex)
-        keepCastControlPageDuringQueueSwitch = false
-        return advanced
     }
 
     function openPictureQueueIndex(index) {
@@ -1470,9 +1161,6 @@ ApplicationWindow {
     }
 
     function openNetworkUrl(mediaUrl, title, resumePosition) {
-        clearPlaybackQueue()
-        clearPictureQueue()
-        clearFolderMediaQueue()
         var playbackUrl = networkSources.normalizedUrl(mediaUrl)
         if (!playbackUrl || playbackUrl.length === 0) {
             playbackError = networkSources.lastError
@@ -1480,6 +1168,7 @@ ApplicationWindow {
             return false
         }
 
+        clearPlaybackQueue()
         pendingNetworkSourceUrl = playbackUrl
         pendingNetworkTitle = cleanedValue(title)
         pendingNetworkResumePosition = resumePosition !== undefined && resumePosition !== null
@@ -1550,8 +1239,6 @@ ApplicationWindow {
 
     function openHistoryEntry(mediaUrl, title, resumePosition) {
         clearPlaybackQueue()
-        clearPictureQueue()
-        clearFolderMediaQueue()
         if (isNetworkUrl(mediaUrl)) {
             openNetworkUrl(mediaUrl, title, resumePosition)
         } else if (isSmbUrl(mediaUrl)) {
@@ -1607,16 +1294,11 @@ ApplicationWindow {
     function openMedia(mediaUrl, title, resumePosition, preserveQueue) {
         if (preserveQueue !== true) {
             clearPlaybackQueue()
-            clearPictureQueue()
-            clearFolderMediaQueue()
         }
         playSource(mediaUrl, mediaUrl, title, resumePosition, false)
     }
 
     function openLocalFileThroughBridge(mediaUrl, title, resumePosition) {
-        clearPlaybackQueue()
-        clearPictureQueue()
-        clearFolderMediaQueue()
         var sourceUrl = normalizedMediaUrl(mediaUrl)
         if (sourceUrl.length === 0) {
             return
@@ -1629,6 +1311,7 @@ ApplicationWindow {
             return
         }
 
+        clearPlaybackQueue()
         playSource(sourceUrl, streamUrl, title, resumePosition, true)
     }
 
@@ -1665,11 +1348,9 @@ ApplicationWindow {
                 : (size > 0 ? size : 0)
         currentPictureTitle = pictureTitle
         currentPictureSource = streamUrl
-        syncSmbQueueIndices(cleanPath, "picture")
 
-        if (!keepCastControlPageDuringQueueSwitch
-                && (!pageStack.currentPage
-                    || pageStack.currentPage.objectName !== "pictureViewerPage")) {
+        if (!pageStack.currentPage
+                || pageStack.currentPage.objectName !== "pictureViewerPage") {
             pageStack.push(Qt.resolvedUrl("pages/PictureViewerPage.qml"))
         }
 
@@ -1715,7 +1396,6 @@ ApplicationWindow {
         currentSmbSize = localFileStreamServer.lastResolvedSize > 0
                 ? localFileStreamServer.lastResolvedSize
                 : (size > 0 ? size : 0)
-        syncSmbQueueIndices(cleanPath, "video")
 
         playSource(sourceUrl, streamUrl, fileTitle, resumePosition, true, "smb")
         return true
@@ -1763,9 +1443,7 @@ ApplicationWindow {
         }
 
         mediaPlayer.stop()
-        if (!remoteQueueSwitch) {
-            resetPlaybackAdjustmentsForNewVideo()
-        }
+        resetPlaybackAdjustmentsForNewVideo()
         mediaPlayer.source = ""
         mediaPlayer.source = currentPlaybackUrl
 
@@ -1774,19 +1452,12 @@ ApplicationWindow {
                                     0,
                                     resume)
 
-        if (!keepCastControlPageDuringQueueSwitch
-                && (!pageStack.currentPage
-                    || pageStack.currentPage.objectName !== "playerPage")) {
+        if (!pageStack.currentPage
+                || pageStack.currentPage.objectName !== "playerPage") {
             pageStack.push(Qt.resolvedUrl("pages/PlayerPage.qml"))
         }
 
-        if (!remoteQueueSwitch) {
-            mediaPlayer.play()
-        } else {
-            playerSuspended = true
-            pendingResumeSeek = false
-            pendingResumeAttempts = 0
-        }
+        mediaPlayer.play()
 
         if (pendingResumeSeek) {
             resumeSeekTimer.restart()
@@ -2073,9 +1744,6 @@ ApplicationWindow {
                 castRequested = true
                 castRejoinPending = false
                 castTargetKind = castManager.imageMedia ? "picture" : "video"
-                if (!castManager.imageMedia) {
-                    castPictureSlideshowRunning = false
-                }
                 castLastDeviceName = castManager.deviceName
                 castLastHost = castManager.host
                 castLastPort = castManager.port > 0 ? castManager.port : 8009
@@ -2090,9 +1758,6 @@ ApplicationWindow {
         onMediaInfoChanged: {
             if (castManager.casting || castRejoinPending) {
                 castTargetKind = castManager.imageMedia ? "picture" : "video"
-                if (!castManager.imageMedia) {
-                    castPictureSlideshowRunning = false
-                }
             }
         }
 
@@ -2247,17 +1912,6 @@ ApplicationWindow {
         interval: 1200
         repeat: false
         onTriggered: appWindow.adjustmentStatus = ""
-    }
-
-    Timer {
-        id: castPictureSlideshowTimer
-        interval: 5000
-        repeat: true
-        running: appWindow.castPictureSlideshowRunning
-                 && appWindow.castMode
-                 && (appWindow.castTargetKind === "picture" || castManager.imageMedia)
-                 && appWindow.pictureQueue.length > 1
-        onTriggered: appWindow.advanceCastPictureSlideshow()
     }
 
     Timer {

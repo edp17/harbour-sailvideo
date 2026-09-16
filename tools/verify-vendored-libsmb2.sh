@@ -35,5 +35,9 @@ git -C "$ROOT_DIR" cat-file -e \
     "HEAD:$REL_DEST/COPYING" 2>/dev/null \
     || fail "$REL_DEST/COPYING is not present in the current commit."
 
+COUNT=$(git -C "$ROOT_DIR" ls-tree -r --name-only HEAD "$REL_DEST" | wc -l)
+[ "$COUNT" -gt 20 ]     || fail "Only $COUNT files are stored under $REL_DEST in HEAD; the full vendored tree is missing."
+
 echo "OK: vendored libsmb2 is present in the working tree and current Git commit."
+echo "Tracked libsmb2 files in HEAD: $COUNT"
 echo "A normal clone of this commit will contain $REL_DEST/CMakeLists.txt."

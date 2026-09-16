@@ -4,24 +4,29 @@ SailVideo first tried to load a system-provided `libsmb2` runtime library, but
 on the first NAS test device no compatible package was installed. The app now
 supports an app-private bundled build.
 
-## Import source
+## Vendored source
 
-From the repository root:
-
-```sh
-sh tools/import-libsmb2.sh
-```
-
-By default this imports upstream tag:
+SailVideo vendors the upstream `libsmb2-6.2` source directly under:
 
 ```text
-libsmb2-6.2
+third_party/libsmb2/
 ```
 
-A different tag can be selected explicitly:
+This is intentional: a normal clone of `harbour-sailvideo` must contain all
+source required for SMB/NAS builds. The build must not depend on network access
+or an extra submodule/bootstrap step.
+
+`tools/import-libsmb2.sh` is retained as a maintainer/recovery helper. It clones
+the requested upstream tag into a temporary directory, removes the nested Git
+metadata, copies the source into `third_party/libsmb2`, and writes
+`SAILVIDEO_VENDOR.txt` with the exact upstream tag and commit.
+
+To refresh the vendored source:
 
 ```sh
-sh tools/import-libsmb2.sh libsmb2-6.1
+rm -rf third_party/libsmb2
+sh tools/import-libsmb2.sh
+git add third_party/libsmb2 tools/import-libsmb2.sh
 ```
 
 ## Build behaviour
@@ -58,20 +63,15 @@ and package. SailVideo installs upstream `COPYING` and `LICENCE-LGPL-2.1.txt`
 under its private library licence directory when bundled source is present.
 
 
-## Phase 4 r3 build rule
+## SMB-enabled build rule
 
-From Phase 4 r3 onward, an SMB-enabled build requires the libsmb2 source tree
-to be present before CMake is configured. This avoids producing an RPM that
-installs successfully but cannot browse NAS shares.
+An SMB-enabled build requires `third_party/libsmb2/CMakeLists.txt` to be
+present before CMake is configured. In the public SailVideo source repository
+this file is part of the vendored libsmb2 tree, so a fresh clone should build
+normally without running an import command.
 
-Run this before building:
-
-```sh
-sh tools/import-libsmb2.sh
-rm -rf CMakeFiles CMakeCache.txt Makefile cmake_install.cmake harbour-sailvideo_autogen install_manifest.txt
-```
-
-Then configure/build normally.
+If the vendored directory has deliberately been removed during maintenance,
+restore it with `tools/import-libsmb2.sh` before configuring CMake.
 
 For a temporary local-video-only developer build, CMake can be configured with:
 

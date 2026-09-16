@@ -6,37 +6,63 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DEST_DIR="$ROOT_DIR/third_party/libsmb2"
 REPO_URL="https://github.com/sahlberg/libsmb2.git"
 
-if [ -d "$DEST_DIR/.git" ]; then
-    echo "Updating existing libsmb2 checkout in $DEST_DIR"
-    git -C "$DEST_DIR" fetch --tags origin
-    git -C "$DEST_DIR" checkout "$TAG"
-elif [ -f "$DEST_DIR/CMakeLists.txt" ]; then
+if [ -f "$DEST_DIR/CMakeLists.txt" ]; then
     echo "libsmb2 source already exists in $DEST_DIR"
-    echo "Leaving it untouched. Remove the directory first if you want to re-import."
-else
-    rm -rf "$DEST_DIR"
-    mkdir -p "$(dirname -- "$DEST_DIR")"
-    echo "Cloning libsmb2 $TAG into $DEST_DIR"
-    git clone --depth 1 --branch "$TAG" "$REPO_URL" "$DEST_DIR"
+    echo "Leaving it untouched. Remove the directory first if you want to re-vendor it."
+    exit 0
 fi
 
-if [ ! -f "$DEST_DIR/CMakeLists.txt" ]; then
-    echo "ERROR: libsmb2 import did not create $DEST_DIR/CMakeLists.txt" >&2
+TMP_BASE="${TMPDIR:-/tmp}"
+TMP_DIR=$(mktemp -d "$TMP_BASE/sailvideo-libsmb2.XXXXXX")
+trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
+
+echo "Cloning libsmb2 $TAG from $REPO_URL"
+git clone --depth 1 --branch "$TAG" "$REPO_URL" "$TMP_DIR/libsmb2"
+
+UPSTREAM_COMMIT=$(git -C "$TMP_DIR/libsmb2" rev-parse HEAD)
+
+if [ ! -f "$TMP_DIR/libsmb2/CMakeLists.txt" ]; then
+    echo "ERROR: libsmb2 checkout does not contain CMakeLists.txt" >&2
     exit 1
 fi
 
-if [ ! -f "$DEST_DIR/COPYING" ] || [ ! -f "$DEST_DIR/LICENCE-LGPL-2.1.txt" ]; then
-    echo "ERROR: libsmb2 licence files are missing after import." >&2
+if [ ! -f "$TMP_DIR/libsmb2/COPYING" ] || [ ! -f "$TMP_DIR/libsmb2/LICENCE-LGPL-2.1.txt" ]; then
+    echo "ERROR: libsmb2 licence files are missing from the checkout." >&2
     exit 1
 fi
+
+rm -rf "$TMP_DIR/libsmb2/.git"
+rm -rf "$DEST_DIR"
+mkdir -p "$DEST_DIR"
+cp -a "$TMP_DIR/libsmb2/." "$DEST_DIR/"
+
+cat > "$DEST_DIR/SAILVIDEO_VENDOR.txt" <<EOF
+Upstream: $REPO_URL
+Tag: $TAG
+Commit: $UPSTREAM_COMMIT
+
+This directory is vendored into the SailVideo source repository so a normal
+git clone contains everything required for SMB-enabled builds.
+EOF
 
 cat <<MESSAGE
 
-libsmb2 is ready.
+libsmb2 is now vendored into:
+  $DEST_DIR
 
-Next build SailVideo normally. CMake should print:
-  Building bundled app-private libsmb2 from third_party/libsmb2
+Upstream tag:
+  $TAG
 
-The RPM should then contain an app-private library under:
-  /usr/lib*/harbour-sailvideo/libsmb2.so*
+Upstream commit:
+  $UPSTREAM_COMMIT
+
+The copied tree is an ordinary part of the SailVideo repository, not a nested
+Git repository or submodule.
+
+Commit it with:
+  git add third_party/libsmb2 tools/import-libsmb2.sh
+  git commit -m "Vendor libsmb2 $TAG for reproducible builds"
+
+After it is pushed, a normal clone of harbour-sailvideo will contain libsmb2
+and can build SMB/NAS support without running this script.
 MESSAGE

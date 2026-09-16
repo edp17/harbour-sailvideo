@@ -40,13 +40,14 @@ only so any possible future reuse is properly attributed.
 Open the project in Sailfish IDE or build it using the usual Sailfish SDK
 CMake/RPM workflow for armv7hl or aarch64.
 
-For SMB/NAS builds, import the bundled `libsmb2` source before configuring:
+The repository vendors the `libsmb2-6.2` source under
+`third_party/libsmb2`, so a normal clone contains everything required for an
+SMB/NAS-enabled build. No dependency bootstrap step should be necessary.
 
-```sh
-sh tools/import-libsmb2.sh
-```
+`tools/import-libsmb2.sh` is a maintainer/recovery helper for re-vendoring the
+pinned upstream source. It is not part of the normal build procedure.
 
-A local-video-only developer build can be configured with
+A local-video-only developer build can still be configured with
 `-DSAILVIDEO_ALLOW_MISSING_LIBSMB2=ON`, but do not use that option for NAS
 testing.
 
@@ -69,7 +70,7 @@ The first test should use a known-good local H.264/AAC MP4 file. Confirm:
 13. adding a saved HTTP/HTTPS media URL works;
 14. opening a one-off HTTP/HTTPS URL without saving works;
 15. saved network sources survive an app restart;
-16. `sh tools/import-libsmb2.sh` populates `third_party/libsmb2`;
+16. a fresh repository clone already contains `third_party/libsmb2/CMakeLists.txt`;
 17. the bundled build installs `libsmb2` under `/usr/lib*/harbour-sailvideo`;
 18. NAS sources can be added and edited;
 19. the NAS page reports whether `libsmb2` is available;

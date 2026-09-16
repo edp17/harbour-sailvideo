@@ -107,3 +107,20 @@ library directory. It must be app-private:
 Phase 4 r4 redirects the libsmb2 subproject install destination by temporarily
 setting `LIB_SUFFIX` before `add_subdirectory(third_party/libsmb2)` and then
 restoring it for the rest of SailVideo.
+
+
+## Verify before pushing
+
+A local `test -f third_party/libsmb2/CMakeLists.txt` only proves that the file
+exists in the current working tree. It does **not** prove that Git tracks it or
+that a fresh clone will contain it.
+
+After committing a vendoring update, always run:
+
+```sh
+sh tools/verify-vendored-libsmb2.sh
+```
+
+The verification checks both the working tree and `HEAD`. A successful result
+means `third_party/libsmb2/CMakeLists.txt` is part of the actual commit that
+will be pushed.

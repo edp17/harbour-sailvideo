@@ -45,7 +45,17 @@ The repository vendors the `libsmb2-6.2` source under
 SMB/NAS-enabled build. No dependency bootstrap step should be necessary.
 
 `tools/import-libsmb2.sh` is a maintainer/recovery helper for re-vendoring the
-pinned upstream source. It is not part of the normal build procedure.
+pinned upstream source. It also stages the complete vendored tree and verifies
+that `third_party/libsmb2/CMakeLists.txt` is tracked.
+
+Before pushing a vendoring update, run:
+
+```sh
+sh tools/verify-vendored-libsmb2.sh
+```
+
+That check verifies that the required libsmb2 files are present in the current
+Git commit, not merely in the local working tree.
 
 A local-video-only developer build can still be configured with
 `-DSAILVIDEO_ALLOW_MISSING_LIBSMB2=ON`, but do not use that option for NAS

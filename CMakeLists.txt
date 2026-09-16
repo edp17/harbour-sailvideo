@@ -48,9 +48,10 @@ if(SAILVIDEO_BUNDLE_LIBSMB2)
         set(SAILVIDEO_HAS_BUNDLED_LIBSMB2 TRUE)
     elseif(NOT SAILVIDEO_ALLOW_MISSING_LIBSMB2)
         message(FATAL_ERROR
-            "SMB/NAS support is enabled, but third_party/libsmb2/CMakeLists.txt is missing.\n"
-            "Run: sh tools/import-libsmb2.sh\n"
-            "Then remove the old CMake cache and rebuild.\n"
+            "SMB/NAS support is enabled, but the vendored libsmb2 source is missing.\n"
+            "A complete SailVideo source checkout must contain third_party/libsmb2/CMakeLists.txt.\n"
+            "If you are maintaining the repository, restore it with tools/import-libsmb2.sh,\n"
+            "commit the entire third_party/libsmb2 tree, and verify with tools/verify-vendored-libsmb2.sh.\n"
             "For a local-only developer build, configure with -DSAILVIDEO_ALLOW_MISSING_LIBSMB2=ON.")
     else()
         message(WARNING "Building without bundled libsmb2 source; NAS/SMB pages will be disabled at runtime")

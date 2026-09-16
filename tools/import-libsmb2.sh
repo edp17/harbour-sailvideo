@@ -5,10 +5,39 @@ TAG="${1:-libsmb2-6.2}"
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DEST_DIR="$ROOT_DIR/third_party/libsmb2"
 REPO_URL="https://github.com/sahlberg/libsmb2.git"
+REL_DEST="third_party/libsmb2"
+
+stage_and_verify()
+{
+    if ! git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "ERROR: $ROOT_DIR is not a Git working tree." >&2
+        exit 1
+    fi
+
+    if [ -e "$DEST_DIR/.git" ]; then
+        echo "ERROR: $DEST_DIR still contains nested Git metadata." >&2
+        exit 1
+    fi
+
+    git -C "$ROOT_DIR" add -f "$REL_DEST"
+
+    if ! git -C "$ROOT_DIR" ls-files --error-unmatch \
+        "$REL_DEST/CMakeLists.txt" >/dev/null 2>&1; then
+        echo "ERROR: libsmb2/CMakeLists.txt exists locally but is not staged/tracked." >&2
+        exit 1
+    fi
+
+    if ! git -C "$ROOT_DIR" ls-files --error-unmatch \
+        "$REL_DEST/COPYING" >/dev/null 2>&1; then
+        echo "ERROR: libsmb2 licence files are not staged/tracked." >&2
+        exit 1
+    fi
+}
 
 if [ -f "$DEST_DIR/CMakeLists.txt" ]; then
     echo "libsmb2 source already exists in $DEST_DIR"
-    echo "Leaving it untouched. Remove the directory first if you want to re-vendor it."
+    echo "Staging and verifying the vendored tree."
+    stage_and_verify
     exit 0
 fi
 
@@ -45,9 +74,11 @@ This directory is vendored into the SailVideo source repository so a normal
 git clone contains everything required for SMB-enabled builds.
 EOF
 
+stage_and_verify
+
 cat <<MESSAGE
 
-libsmb2 is now vendored into:
+libsmb2 is now vendored and staged in:
   $DEST_DIR
 
 Upstream tag:
@@ -56,13 +87,8 @@ Upstream tag:
 Upstream commit:
   $UPSTREAM_COMMIT
 
-The copied tree is an ordinary part of the SailVideo repository, not a nested
-Git repository or submodule.
+Before pushing, commit the staged vendored source and run:
+  sh tools/verify-vendored-libsmb2.sh
 
-Commit it with:
-  git add third_party/libsmb2 tools/import-libsmb2.sh
-  git commit -m "Vendor libsmb2 $TAG for reproducible builds"
-
-After it is pushed, a normal clone of harbour-sailvideo will contain libsmb2
-and can build SMB/NAS support without running this script.
+Then push the commit normally.
 MESSAGE

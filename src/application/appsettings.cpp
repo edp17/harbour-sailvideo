@@ -91,6 +91,22 @@ void AppSettings::setSkipSeconds(int seconds)
     scheduleSave();
 }
 
+int AppSettings::pictureSlideshowSeconds() const
+{
+    return m_pictureSlideshowSeconds;
+}
+
+void AppSettings::setPictureSlideshowSeconds(int seconds)
+{
+    const int cleanSeconds = normalizedPictureSlideshowSeconds(seconds);
+    if (m_pictureSlideshowSeconds == cleanSeconds) {
+        return;
+    }
+    m_pictureSlideshowSeconds = cleanSeconds;
+    emit pictureSlideshowSecondsChanged();
+    scheduleSave();
+}
+
 bool AppSettings::keepDisplayOn() const
 {
     return m_keepDisplayOn;
@@ -345,6 +361,7 @@ void AppSettings::resetToDefaults()
 {
     const bool fillChanged = m_videoFillMode != QLatin1String("fit");
     const bool skipChanged = m_skipSeconds != 10;
+    const bool slideshowChanged = m_pictureSlideshowSeconds != 5;
     const bool keepChanged = !m_keepDisplayOn;
     const bool videosChanged = m_nasShowOnlyVideos;
     const bool hiddenChanged = m_nasShowHiddenFiles;
@@ -355,6 +372,7 @@ void AppSettings::resetToDefaults()
 
     m_videoFillMode = QStringLiteral("fit");
     m_skipSeconds = 10;
+    m_pictureSlideshowSeconds = 5;
     m_keepDisplayOn = true;
     m_nasShowOnlyVideos = false;
     m_nasShowHiddenFiles = false;
@@ -374,6 +392,7 @@ void AppSettings::resetToDefaults()
 
     if (fillChanged) emit videoFillModeChanged();
     if (skipChanged) emit skipSecondsChanged();
+    if (slideshowChanged) emit pictureSlideshowSecondsChanged();
     if (keepChanged) emit keepDisplayOnChanged();
     if (videosChanged) emit nasShowOnlyVideosChanged();
     if (hiddenChanged) emit nasShowHiddenFilesChanged();
@@ -415,6 +434,8 @@ void AppSettings::load()
     const QJsonObject root = document.object();
     m_videoFillMode = normalizedFillMode(root.value(QStringLiteral("videoFillMode")).toString(QStringLiteral("fit")));
     m_skipSeconds = normalizedSkipSeconds(root.value(QStringLiteral("skipSeconds")).toInt(10));
+    m_pictureSlideshowSeconds = normalizedPictureSlideshowSeconds(
+                root.value(QStringLiteral("pictureSlideshowSeconds")).toInt(5));
     m_keepDisplayOn = root.value(QStringLiteral("keepDisplayOn")).toBool(true);
     m_nasShowOnlyVideos = root.value(QStringLiteral("nasShowOnlyVideos")).toBool(false);
     m_nasShowHiddenFiles = root.value(QStringLiteral("nasShowHiddenFiles")).toBool(false);
@@ -454,9 +475,10 @@ bool AppSettings::save() const
         return false;
     }
     QJsonObject root;
-    root.insert(QStringLiteral("version"), 3);
+    root.insert(QStringLiteral("version"), 4);
     root.insert(QStringLiteral("videoFillMode"), m_videoFillMode);
     root.insert(QStringLiteral("skipSeconds"), m_skipSeconds);
+    root.insert(QStringLiteral("pictureSlideshowSeconds"), m_pictureSlideshowSeconds);
     root.insert(QStringLiteral("keepDisplayOn"), m_keepDisplayOn);
     root.insert(QStringLiteral("nasShowOnlyVideos"), m_nasShowOnlyVideos);
     root.insert(QStringLiteral("nasShowHiddenFiles"), m_nasShowHiddenFiles);
@@ -504,6 +526,15 @@ int AppSettings::normalizedSkipSeconds(int seconds)
     if (seconds <= 45) return 30;
     if (seconds <= 90) return 60;
     return 120;
+}
+
+int AppSettings::normalizedPictureSlideshowSeconds(int seconds)
+{
+    if (seconds <= 3) return 3;
+    if (seconds <= 5) return 5;
+    if (seconds <= 10) return 10;
+    if (seconds <= 15) return 15;
+    return 30;
 }
 
 int AppSettings::normalizedPercent(int percent, int minimum, int fallback)

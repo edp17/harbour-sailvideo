@@ -146,7 +146,7 @@ Page {
 
                         Label {
                             width: parent.width
-                            text: (appWindow.castTargetKind === "picture" || castManager.imageMedia)
+                            text: appWindow.castActivePicture
                                   ? (appWindow.currentPictureTitle.length > 0
                                      ? appWindow.currentPictureTitle
                                      : qsTr("Picture"))
@@ -165,8 +165,7 @@ Page {
                                         .arg(castManager.deviceName.length > 0
                                              ? castManager.deviceName
                                              : appWindow.castLastDeviceName)
-                                        .arg(appWindow.castTargetKind === "picture"
-                                             || castManager.imageMedia
+                                        .arg(appWindow.castActivePicture
                                              ? qsTr("picture")
                                              : appWindow.formatTime(appWindow.playbackPosition()))
                                   : qsTr("Last Cast session on %1 · tap to reconnect")

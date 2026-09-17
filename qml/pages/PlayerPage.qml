@@ -218,7 +218,7 @@ Page {
             page.gestureLastY = mouse.y
 
             if (page.gestureStartX < width / 2) {
-                if (!appWindow.castMode) {
+                if (!appWindow.videoCastActive) {
                     appWindow.adjustVideoBrightness(deltaY > 0 ? 5 : -5)
                 }
             } else {
@@ -253,7 +253,7 @@ Page {
                 top: parent.top
                 bottom: parent.bottom
             }
-            visible: !appWindow.castMode
+            visible: !appWindow.videoCastActive
             width: parent.width / 2
             color: "#30209fd6"
 
@@ -315,7 +315,7 @@ Page {
 
                 Label {
                     width: volumeHint.width
-                    text: appWindow.castMode ? qsTr("Cast volume") : qsTr("Volume")
+                    text: appWindow.videoCastActive ? qsTr("Cast volume") : qsTr("Volume")
                     color: "white"
                     font.pixelSize: Theme.fontSizeSmall
                     horizontalAlignment: Text.AlignHCenter
@@ -380,8 +380,8 @@ Page {
 
                 Label {
                     width: parent.width
-                    text: appWindow.castMode ? "◉" : "◌"
-                    color: appWindow.castMode
+                    text: appWindow.videoCastActive ? "◉" : "◌"
+                    color: appWindow.videoCastActive
                            ? Theme.highlightColor
                            : (castButton.highlighted ? Theme.highlightColor : "white")
                     font.pixelSize: Theme.fontSizeLarge
@@ -391,7 +391,7 @@ Page {
                 Label {
                     width: parent.width
                     text: qsTr("Cast")
-                    color: appWindow.castMode ? Theme.highlightColor : "white"
+                    color: appWindow.videoCastActive ? Theme.highlightColor : "white"
                     font.pixelSize: Theme.fontSizeTiny
                     horizontalAlignment: Text.AlignHCenter
                 }
@@ -418,11 +418,15 @@ Page {
             Label {
                 visible: appWindow.castMode
                 width: parent.width
-                text: qsTr("Casting to %1").arg(
-                          castManager.deviceName.length > 0
-                          ? castManager.deviceName
-                          : appWindow.castLastDeviceName)
-                color: Theme.highlightColor
+                text: appWindow.videoCastActive
+                      ? qsTr("Casting to %1").arg(
+                            castManager.deviceName.length > 0
+                            ? castManager.deviceName
+                            : appWindow.castLastDeviceName)
+                      : qsTr("Chromecast is displaying a picture")
+                color: appWindow.videoCastActive
+                       ? Theme.highlightColor
+                       : Theme.secondaryColor
                 font.pixelSize: Theme.fontSizeTiny
                 truncationMode: TruncationMode.Fade
             }
@@ -437,7 +441,7 @@ Page {
                      || appWindow.player.status === MediaPlayer.Buffering
                      || appWindow.player.status === MediaPlayer.Stalled
                      || appWindow.playbackError.length > 0
-                     || appWindow.castMode)
+                     || appWindow.videoCastActive)
         anchors.centerIn: parent
         width: Math.min(parent.width - 2 * Theme.horizontalPageMargin,
                         statusLabel.implicitWidth + 2 * Theme.paddingLarge)
@@ -573,7 +577,7 @@ Page {
 
                         width: Theme.itemSizeMedium
                         height: Theme.itemSizeMedium
-                        enabled: !appWindow.castMode
+                        enabled: !appWindow.videoCastActive
                         opacity: enabled ? 1.0 : 0.35
 
                         onClicked: {
@@ -623,7 +627,7 @@ Page {
 
             Label {
                 width: parent.width
-                text: appWindow.castMode
+                text: appWindow.videoCastActive
                       ? qsTr("Right swipe: Cast volume · Remote controls active")
                       : qsTr("Left swipe: video brightness · Right swipe: media volume · Scaling: %1")
                             .arg(appWindow.fillModeShortLabel())
@@ -699,7 +703,7 @@ Page {
 
                 Label {
                     anchors.centerIn: parent
-                    visible: (!appWindow.castMode && appWindow.pendingResumeSeek)
+                    visible: (!appWindow.videoCastActive && appWindow.pendingResumeSeek)
                              || appWindow.userSeekPending
                     text: appWindow.userSeekPending ? qsTr("Seeking") : qsTr("Resuming")
                     color: Theme.highlightColor

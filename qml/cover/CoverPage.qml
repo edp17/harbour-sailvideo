@@ -41,9 +41,13 @@ CoverBackground {
             verticalCenter: parent.verticalCenter
             margins: Theme.paddingLarge
         }
-        text: appWindow.hasMedia
-              ? appWindow.currentMediaTitle
-              : qsTr("No video selected")
+        text: appWindow.castActivePicture
+              ? (appWindow.currentPictureTitle.length > 0
+                 ? appWindow.currentPictureTitle
+                 : qsTr("Picture"))
+              : (appWindow.hasMedia
+                 ? appWindow.currentMediaTitle
+                 : qsTr("No video selected"))
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         wrapMode: Text.Wrap
@@ -60,10 +64,15 @@ CoverBackground {
             bottomMargin: Theme.paddingLarge * 3
             margins: Theme.paddingLarge
         }
-        text: qsTr("Casting to %1").arg(
-                  castManager.deviceName.length > 0
-                  ? castManager.deviceName
-                  : appWindow.castLastDeviceName)
+        text: appWindow.castActivePicture
+              ? qsTr("Displaying picture on %1").arg(
+                    castManager.deviceName.length > 0
+                    ? castManager.deviceName
+                    : appWindow.castLastDeviceName)
+              : qsTr("Casting to %1").arg(
+                    castManager.deviceName.length > 0
+                    ? castManager.deviceName
+                    : appWindow.castLastDeviceName)
         horizontalAlignment: Text.AlignHCenter
         color: Theme.highlightColor
         font.pixelSize: Theme.fontSizeExtraSmall
@@ -71,7 +80,7 @@ CoverBackground {
     }
 
     CoverActionList {
-        enabled: appWindow.hasMedia
+        enabled: appWindow.hasMedia && !appWindow.castActivePicture
 
         CoverAction {
             iconSource: appWindow.playbackIsPlaying()

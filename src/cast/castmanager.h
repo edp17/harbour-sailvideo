@@ -27,6 +27,7 @@ class CastManager : public QObject
     Q_PROPERTY(bool mediaStopped READ mediaStopped NOTIFY mediaStoppedChanged)
     Q_PROPERTY(bool rejoining READ rejoining NOTIFY rejoiningChanged)
     Q_PROPERTY(bool imageMedia READ imageMedia NOTIFY mediaInfoChanged)
+    Q_PROPERTY(bool mediaInfoKnown READ mediaInfoKnown NOTIFY mediaInfoChanged)
     Q_PROPERTY(QString deviceName READ deviceName NOTIFY deviceChanged)
     Q_PROPERTY(QString host READ host NOTIFY deviceChanged)
     Q_PROPERTY(int port READ port NOTIFY deviceChanged)
@@ -49,6 +50,7 @@ public:
     bool mediaStopped() const;
     bool rejoining() const;
     bool imageMedia() const;
+    bool mediaInfoKnown() const;
     QString deviceName() const;
     QString host() const;
     int port() const;
@@ -75,6 +77,11 @@ public:
                                   const QString &contentType,
                                   const QString &title,
                                   qint64 startPositionMs = 0);
+    Q_INVOKABLE bool replaceMediaWithVolume(const QString &mediaUrl,
+                                            const QString &contentType,
+                                            const QString &title,
+                                            qint64 startPositionMs,
+                                            int initialVolumePercent);
     Q_INVOKABLE void play();
     Q_INVOKABLE void pause();
     Q_INVOKABLE void seek(qint64 positionMs);
@@ -196,6 +203,7 @@ private:
     QString m_statusText;
     QString m_lastError;
 
+    QString m_activeContentType;
     QString m_pendingMediaUrl;
     QString m_pendingContentType;
     QString m_pendingTitle;

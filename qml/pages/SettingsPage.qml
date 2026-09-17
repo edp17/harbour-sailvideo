@@ -42,6 +42,14 @@ Page {
         return qsTr("%1 seconds").arg(seconds)
     }
 
+    function nextSlideshowSeconds(value) {
+        if (value <= 3) return 5
+        if (value <= 5) return 10
+        if (value <= 10) return 15
+        if (value <= 15) return 30
+        return 3
+    }
+
     function nextPercent(value, minimum) {
         var next = Math.round(value / 10) * 10 + 10
         return next > 100 ? minimum : next
@@ -127,6 +135,14 @@ Page {
                 value: skipLabel(appSettings.skipSeconds)
                 description: qsTr("Used by the player skip-back and skip-forward buttons.")
                 onClicked: appSettings.skipSeconds = nextSkipSeconds(appSettings.skipSeconds)
+            }
+
+            ValueButton {
+                label: qsTr("Picture slideshow interval")
+                value: skipLabel(appSettings.pictureSlideshowSeconds)
+                description: qsTr("Waiting time between pictures in local and Chromecast slideshows.")
+                onClicked: appSettings.pictureSlideshowSeconds =
+                           nextSlideshowSeconds(appSettings.pictureSlideshowSeconds)
             }
 
             ValueButton {
@@ -229,7 +245,7 @@ Page {
             Label {
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
-                text: qsTr("Reset restores playback/browser preferences: Fit scaling, 10 second skip interval, new video volume 30%, new video brightness 50%, keep-display-on enabled, media-file preference off, hidden files off, and clears the last browsed NAS shortcut. It does not delete NAS sources, passwords or playback history.")
+                text: qsTr("Reset restores playback/browser preferences: Fit scaling, 10 second skip interval, 5 second picture slideshow interval, new video volume 30%, new video brightness 50%, keep-display-on enabled, media-file preference off, hidden files off, and clears the last browsed NAS shortcut. It does not delete NAS sources, passwords or playback history.")
                 color: Theme.secondaryColor
                 font.pixelSize: Theme.fontSizeExtraSmall
                 wrapMode: Text.Wrap

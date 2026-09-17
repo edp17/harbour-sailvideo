@@ -16,9 +16,11 @@ Page {
     property string lastAttemptName: ""
     property string lastAttemptHost: ""
     property int lastAttemptPort: 8009
-    property bool activePictureCast: appWindow.castMode
-                                     && (appWindow.castTargetKind === "picture"
-                                         || castManager.imageMedia)
+    property bool activePictureCast: appWindow.castActivePicture
+    property bool requestedPictureCast: appWindow.castTargetKind === "picture"
+    property bool mediaTypeMismatch: appWindow.castMode
+                                     && castManager.mediaInfoKnown
+                                     && activePictureCast !== requestedPictureCast
 
     function attemptDevice(name, host, port) {
         page.lastAttemptName = name || ""
@@ -83,7 +85,7 @@ Page {
                                 ? castManager.deviceName
                                 : qsTr("Chromecast"))
                           : qsTr("%1 %2")
-                                .arg(castManager.imageMedia
+                                .arg(page.activePictureCast
                                      ? qsTr("Displaying on")
                                      : qsTr("Casting to"))
                                 .arg(castManager.deviceName.length > 0
@@ -121,33 +123,9 @@ Page {
                     wrapMode: Text.Wrap
                 }
 
-                Row {
-                    visible: !page.activePictureCast
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    spacing: Theme.paddingMedium
-
-                    Button {
-                        text: castManager.muted ? qsTr("Unmute") : qsTr("Mute")
-                        enabled: castManager.connected
-                        onClicked: castManager.setMuted(!castManager.muted)
-                    }
-
-                    Button {
-                        text: castManager.mediaStopped
-                              ? qsTr("Start / continue")
-                              : qsTr("Stop media")
-                        enabled: castManager.connected
-                                 && (castManager.mediaStopped || castManager.casting)
-                        onClicked: {
-                            if (castManager.mediaStopped) {
-                                castManager.continueMedia()
-                            } else {
-                                castManager.stopMedia()
-                            }
-                        }
-                    }
-                }
-
+                // Keep this navigation row above every media-specific
+                // control. Picture <-> video switches must never move
+                // Previous/Next underneath the user's finger.
                 Row {
                     visible: appWindow.castMode
                              && (appWindow.hasPreviousVideoControl
@@ -175,22 +153,63 @@ Page {
                 }
 
                 Button {
-                    visible: page.activePictureCast && appWindow.pictureQueue.length > 1
+                    visible: page.mediaTypeMismatch
+                             && (page.requestedPictureCast
+                                 ? appWindow.currentPictureSource.length > 0
+                                 : appWindow.hasMedia)
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: page.requestedPictureCast
+                          ? qsTr("Cast current picture")
+                          : qsTr("Cast current video")
+                    enabled: castManager.connected && !castManager.disconnecting
+                    onClicked: appWindow.castRequestedMediaToConnectedDevice(false)
+                }
+
+                Button {
+                    visible: page.requestedPictureCast
+                             && appWindow.pictureQueue.length > 1
                     anchors.horizontalCenter: parent.horizontalCenter
                     text: appWindow.castPictureSlideshowRunning
                           ? qsTr("Stop slideshow")
                           : qsTr("Start slideshow")
-                    onClicked: appWindow.castPictureSlideshowRunning =
-                               !appWindow.castPictureSlideshowRunning
+                    enabled: castManager.connected && !castManager.disconnecting
+                    onClicked: appWindow.toggleCastPictureSlideshowFromControlPage()
+                }
+
+                Row {
+                    visible: !page.activePictureCast
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: Theme.paddingMedium
+
+                    Button {
+                        text: castManager.muted ? qsTr("Unmute") : qsTr("Mute")
+                        enabled: castManager.connected
+                        onClicked: castManager.setMuted(!castManager.muted)
+                    }
+
+                    Button {
+                        text: castManager.mediaStopped
+                              ? qsTr("Start / continue")
+                              : qsTr("Stop media")
+                        enabled: castManager.connected
+                                 && (castManager.mediaStopped || castManager.casting)
+                        onClicked: {
+                            if (castManager.mediaStopped) {
+                                castManager.continueMedia()
+                            } else {
+                                castManager.stopMedia()
+                            }
+                        }
+                    }
                 }
 
                 Button {
                     visible: appWindow.castMode
-                             && ((page.activePictureCast
+                             && ((page.requestedPictureCast
                                   && appWindow.currentPictureSource.length > 0)
-                                 || (!page.activePictureCast && appWindow.hasMedia))
+                                 || (!page.requestedPictureCast && appWindow.hasMedia))
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: page.activePictureCast
+                    text: page.requestedPictureCast
                           ? qsTr("Return to picture")
                           : qsTr("Return to player")
                     onClicked: appWindow.returnToActiveCastMedia()

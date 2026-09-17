@@ -182,7 +182,12 @@ bool CastManager::mediaStopped() const { return m_mediaStopped; }
 bool CastManager::rejoining() const { return m_rejoining; }
 bool CastManager::imageMedia() const
 {
-    return m_pendingContentType.trimmed().toLower().startsWith(QStringLiteral("image/"));
+    return m_activeContentType.trimmed().toLower().startsWith(QStringLiteral("image/"));
+}
+
+bool CastManager::mediaInfoKnown() const
+{
+    return !m_activeContentType.trimmed().isEmpty();
 }
 QString CastManager::deviceName() const { return m_deviceName; }
 QString CastManager::host() const { return m_host; }
@@ -210,7 +215,6 @@ bool CastManager::configurePendingMedia(const QString &mediaUrl,
         return false;
     }
 
-    const QString oldType = m_pendingContentType;
     m_pendingMediaUrl = cleanUrl;
     m_pendingContentType = contentType.trimmed().isEmpty()
             ? contentTypeForUrl(cleanUrl, title)
@@ -218,9 +222,6 @@ bool CastManager::configurePendingMedia(const QString &mediaUrl,
     m_pendingTitle = title.trimmed();
     m_pendingStartPosition = qMax<qint64>(0, startPositionMs);
     setPosition(m_pendingStartPosition);
-    if (oldType != m_pendingContentType) {
-        emit mediaInfoChanged();
-    }
     return true;
 }
 
@@ -287,14 +288,10 @@ bool CastManager::rejoin(const QString &deviceName,
     m_port = port > 0 ? port : 8009;
     emit deviceChanged();
 
-    const bool hadImageType = imageMedia();
     m_pendingMediaUrl.clear();
     m_pendingContentType.clear();
     m_pendingTitle.clear();
     m_pendingStartPosition = 0;
-    if (hadImageType) {
-        emit mediaInfoChanged();
-    }
 
     setRejoining(true);
     setLastError(QString());
@@ -320,6 +317,7 @@ bool CastManager::replaceMedia(const QString &mediaUrl,
         return false;
     }
 
+    m_initialVolumePercent = -1;
     m_mediaSessionId = 0;
     m_loadSent = false;
     m_finishedEmitted = false;
@@ -332,6 +330,46 @@ bool CastManager::replaceMedia(const QString &mediaUrl,
             << "startMs=" << m_pendingStartPosition
             << "contentType=" << m_pendingContentType;
     sendLoad();
+    return true;
+}
+
+bool CastManager::replaceMediaWithVolume(const QString &mediaUrl,
+                                         const QString &contentType,
+                                         const QString &title,
+                                         qint64 startPositionMs,
+                                         int initialVolumePercent)
+{
+    if (!m_connected || m_transportId.isEmpty()) {
+        setLastError(tr("Chromecast is not connected."));
+        return false;
+    }
+
+    if (!configurePendingMedia(mediaUrl, contentType, title, startPositionMs)) {
+        return false;
+    }
+
+    m_initialVolumePercent = qBound(0, initialVolumePercent, 100);
+    m_mediaSessionId = 0;
+    m_loadSent = false;
+    m_finishedEmitted = false;
+    m_stopRequested = false;
+    m_stoppedPosition = 0;
+    setMediaStopped(false);
+    setLastError(QString());
+
+    qInfo() << "SailVideo Cast: replacing video media"
+            << "startMs=" << m_pendingStartPosition
+            << "contentType=" << m_pendingContentType
+            << "requestedVolume=" << m_initialVolumePercent;
+
+    // Keep the old receiver media active until the requested volume is
+    // confirmed. processReceiverStatus() sends LOAD only after confirmation.
+    qInfo() << "SailVideo Cast: applying handoff receiver volume"
+            << m_initialVolumePercent
+            << "and clearing receiver mute";
+    setVolumePercent(m_initialVolumePercent);
+    setMuted(false);
+    sendReceiverStatus();
     return true;
 }
 
@@ -349,6 +387,11 @@ void CastManager::resetForNewRequest()
     m_stoppedPosition = 0;
     m_initialVolumePercent = -1;
     m_pollTick = 0;
+    const bool hadMediaInfo = !m_activeContentType.isEmpty();
+    m_activeContentType.clear();
+    if (hadMediaInfo) {
+        emit mediaInfoChanged();
+    }
     setDisconnecting(false);
     setMediaStopped(false);
     setRejoining(false);
@@ -370,6 +413,11 @@ void CastManager::clearSessionState(bool preservePosition)
     m_stopRequested = false;
     m_stoppedPosition = 0;
     m_initialVolumePercent = -1;
+    const bool hadMediaInfo = !m_activeContentType.isEmpty();
+    m_activeContentType.clear();
+    if (hadMediaInfo) {
+        emit mediaInfoChanged();
+    }
     setConnected(false);
     setCasting(false);
     setDisconnecting(false);
@@ -391,8 +439,10 @@ void CastManager::handleEncrypted()
     sendConnection(QString::fromLatin1(ReceiverId));
     if (m_initialVolumePercent >= 0) {
         qInfo() << "SailVideo Cast: applying initial receiver volume"
-                << m_initialVolumePercent;
+                << m_initialVolumePercent
+                << "and clearing receiver mute";
         setVolumePercent(m_initialVolumePercent);
+        setMuted(false);
     }
     sendReceiverStatus();
     m_pollTimer.start();
@@ -601,7 +651,8 @@ void CastManager::sendLoad()
     m_finishedEmitted = false;
     sendConnection(m_transportId);
 
-    const bool picture = imageMedia();
+    const bool picture =
+            m_pendingContentType.trimmed().toLower().startsWith(QStringLiteral("image/"));
 
     QJsonObject metadata;
     metadata.insert(QStringLiteral("metadataType"), picture ? 4 : 0);
@@ -823,19 +874,27 @@ void CastManager::detach()
 
 QString CastManager::contentTypeForUrl(const QString &url, const QString &title) const
 {
-    QMimeDatabase database;
     QString fileName = title.trimmed();
     if (fileName.isEmpty()) {
         fileName = QUrl(url).path();
     }
 
+    const QString lower = fileName.toLower();
+
+    // Google Cast documents MP4 rather than QuickTime/MOV as a progressive
+    // container. Many MOV files use the same ISO-BMFF family and contain
+    // Cast-compatible H.264/AAC tracks, so advertise those as video/mp4.
+    // This does not transcode unsupported codecs such as ProRes.
+    if (lower.endsWith(QStringLiteral(".mov"))) {
+        return QStringLiteral("video/mp4");
+    }
+
+    QMimeDatabase database;
     const QMimeType type = database.mimeTypeForFile(fileName,
                                                     QMimeDatabase::MatchExtension);
     if (type.isValid() && type.name() != QStringLiteral("application/octet-stream")) {
         return type.name();
     }
-
-    const QString lower = fileName.toLower();
     if (lower.endsWith(QStringLiteral(".mkv"))) {
         return QStringLiteral("video/x-matroska");
     }
@@ -846,7 +905,7 @@ QString CastManager::contentTypeForUrl(const QString &url, const QString &title)
         return QStringLiteral("video/x-msvideo");
     }
     if (lower.endsWith(QStringLiteral(".mov"))) {
-        return QStringLiteral("video/quicktime");
+        return QStringLiteral("video/mp4");
     }
     if (lower.endsWith(QStringLiteral(".jpg"))
             || lower.endsWith(QStringLiteral(".jpeg"))) {
@@ -881,10 +940,12 @@ void CastManager::pollStatus()
     }
 
     ++m_pollTick;
-    if (!m_transportId.isEmpty()) {
+    if (!m_transportId.isEmpty() && m_loadSent) {
         sendMediaStatus();
     }
-    if (m_pollTick % 5 == 0 || m_transportId.isEmpty()) {
+    if ((m_initialVolumePercent >= 0 && !m_loadSent)
+            || m_pollTick % 5 == 0
+            || m_transportId.isEmpty()) {
         sendReceiverStatus();
     }
 
@@ -945,25 +1006,51 @@ void CastManager::processReceiverStatus(const QJsonObject &message)
 {
     const QJsonObject status = message.value(QStringLiteral("status")).toObject();
     const QJsonObject volume = status.value(QStringLiteral("volume")).toObject();
+    bool initialVolumeReady = m_initialVolumePercent < 0;
+    bool initialMuteReady = m_initialVolumePercent < 0;
 
     if (volume.contains(QStringLiteral("level"))) {
         const int reportedVolume =
                 qBound(0,
                        qRound(volume.value(QStringLiteral("level")).toDouble() * 100.0),
                        100);
-        if (m_initialVolumePercent >= 0
-                && qAbs(reportedVolume - m_initialVolumePercent) > 1) {
-            qInfo() << "SailVideo Cast: receiver reported volume"
-                    << reportedVolume
-                    << "before LOAD; reapplying requested initial volume"
-                    << m_initialVolumePercent;
-            setVolumePercent(m_initialVolumePercent);
+        if (m_initialVolumePercent >= 0) {
+            if (qAbs(reportedVolume - m_initialVolumePercent) > 1) {
+                qInfo() << "SailVideo Cast: receiver reported volume"
+                        << reportedVolume
+                        << "before LOAD; reapplying requested initial volume"
+                        << m_initialVolumePercent;
+                setVolumePercent(m_initialVolumePercent);
+                initialVolumeReady = false;
+            } else {
+                qInfo() << "SailVideo Cast: receiver volume confirmed at"
+                        << reportedVolume << "before LOAD";
+                setVolumeInternal(reportedVolume);
+                initialVolumeReady = true;
+            }
         } else {
             setVolumeInternal(reportedVolume);
         }
+    } else if (m_initialVolumePercent >= 0) {
+        initialVolumeReady = false;
     }
     if (volume.contains(QStringLiteral("muted"))) {
-        setMutedInternal(volume.value(QStringLiteral("muted")).toBool());
+        const bool reportedMuted =
+                volume.value(QStringLiteral("muted")).toBool();
+        setMutedInternal(reportedMuted);
+        if (m_initialVolumePercent >= 0) {
+            if (reportedMuted) {
+                qInfo() << "SailVideo Cast: receiver still muted before LOAD;"
+                        << "reapplying unmute";
+                setMuted(false);
+                initialMuteReady = false;
+            } else {
+                qInfo() << "SailVideo Cast: receiver unmute confirmed before LOAD";
+                initialMuteReady = true;
+            }
+        }
+    } else if (m_initialVolumePercent >= 0) {
+        initialMuteReady = false;
     }
 
     const QJsonArray applications = status.value(QStringLiteral("applications")).toArray();
@@ -1024,6 +1111,10 @@ void CastManager::processReceiverStatus(const QJsonObject &message)
     }
 
     if (!m_pendingMediaUrl.isEmpty() && !m_loadSent) {
+        if (!initialVolumeReady || !initialMuteReady) {
+            setStatusText(tr("Preparing Cast audio on %1").arg(m_deviceName));
+            return;
+        }
         sendLoad();
     } else if (!m_transportId.isEmpty()) {
         sendMediaStatus();
@@ -1083,27 +1174,47 @@ void CastManager::processMediaStatus(const QJsonObject &message)
     const QJsonObject metadata = media.value(QStringLiteral("metadata")).toObject();
     const QString remoteTitle = metadata.value(QStringLiteral("title")).toString().trimmed();
 
-    bool mediaInfoWasChanged = false;
-    if (!remoteContentId.isEmpty() && remoteContentId != m_pendingMediaUrl) {
-        m_pendingMediaUrl = remoteContentId;
-        mediaInfoWasChanged = true;
+    const bool remoteMatchesPending =
+            !remoteContentId.isEmpty()
+            && !m_pendingMediaUrl.isEmpty()
+            && remoteContentId == m_pendingMediaUrl;
+
+    QString confirmedContentType = remoteContentType;
+    if (confirmedContentType.isEmpty() && remoteMatchesPending) {
+        confirmedContentType = m_pendingContentType;
     }
-    if (!remoteContentType.isEmpty() && remoteContentType != m_pendingContentType) {
-        m_pendingContentType = remoteContentType;
-        mediaInfoWasChanged = true;
-    }
-    if (!remoteTitle.isEmpty()) {
-        m_pendingTitle = remoteTitle;
-    }
-    if (mediaInfoWasChanged) {
+
+    if (!confirmedContentType.isEmpty()
+            && confirmedContentType != m_activeContentType) {
+        m_activeContentType = confirmedContentType;
         emit mediaInfoChanged();
+    }
+
+    // An old MEDIA_STATUS can arrive while a picture/video replacement is in
+    // flight. Never let that stale status overwrite the new pending LOAD.
+    // Rejoin is the exception: there is no pending sender request, so the
+    // receiver is authoritative.
+    const bool adoptRemoteAsPending =
+            m_rejoining || m_pendingMediaUrl.isEmpty() || remoteMatchesPending;
+    if (adoptRemoteAsPending) {
+        if (!remoteContentId.isEmpty()) {
+            m_pendingMediaUrl = remoteContentId;
+        }
+        if (!remoteContentType.isEmpty()) {
+            m_pendingContentType = remoteContentType;
+        }
+        if (!remoteTitle.isEmpty()) {
+            m_pendingTitle = remoteTitle;
+        }
     }
 
     if (media.contains(QStringLiteral("duration"))) {
         setDuration(qRound64(media.value(QStringLiteral("duration")).toDouble() * 1000.0));
     }
 
-    m_pendingStartPosition = m_position;
+    if (remoteMatchesPending || m_rejoining || m_pendingMediaUrl.isEmpty()) {
+        m_pendingStartPosition = m_position;
+    }
     m_stopRequested = false;
     if (state == QStringLiteral("PLAYING")
             || state == QStringLiteral("PAUSED")

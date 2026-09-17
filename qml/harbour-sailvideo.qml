@@ -71,15 +71,19 @@ ApplicationWindow {
                                               && folderMediaQueueIndex >= 0
                                               && folderMediaQueue.length > 0
     property bool hasPreviousVideoControl: castFolderNavigationActive
+                                           && videoCastActive
                                            ? hasPreviousFolderMedia
                                            : hasPreviousVideo
     property bool hasNextVideoControl: castFolderNavigationActive
+                                       && videoCastActive
                                        ? hasNextFolderMedia
                                        : hasNextVideo
     property bool hasPreviousPictureControl: castFolderNavigationActive
+                                             && castActivePicture
                                              ? hasPreviousFolderMedia
                                              : hasPreviousPicture
     property bool hasNextPictureControl: castFolderNavigationActive
+                                         && castActivePicture
                                          ? hasNextFolderMedia
                                          : hasNextPicture
     property bool castPictureSlideshowRunning: false
@@ -113,7 +117,19 @@ ApplicationWindow {
     property bool castResumeLocalAfterDisconnect: false
     property bool castDisconnectOnly: false
     property bool castRejoinPending: false
+    // What the user came to the Cast page intending to send.
     property string castTargetKind: "video"
+
+    // What the receiver is actually showing. During initial connection there
+    // is no receiver media status yet, so use the requested kind as fallback.
+    // During picture <-> video replacement, keep the old confirmed type until
+    // Chromecast acknowledges the new media.
+    property bool castActivePicture: castMode
+                                     && (castManager.mediaInfoKnown
+                                         ? castManager.imageMedia
+                                         : castTargetKind === "picture")
+    property bool videoCastActive: castMode && !castActivePicture
+
     property int castReturnPosition: 0
     property bool castUsesLanBridge: false
     property string castLastDeviceName: ""
@@ -229,7 +245,7 @@ ApplicationWindow {
     }
 
     function volumePercent() {
-        if (castMode) {
+        if (videoCastActive) {
             return castManager.volumePercent
         }
         return playbackVolumePercent
@@ -238,7 +254,7 @@ ApplicationWindow {
     function setVolumePercent(value) {
         var bounded = Math.max(0, Math.min(100, Math.round(value)))
 
-        if (castMode) {
+        if (videoCastActive) {
             if (castManager.connected) {
                 castManager.setVolumePercent(bounded)
                 showAdjustmentStatus(qsTr("Cast volume: %1%").arg(bounded))
@@ -311,28 +327,28 @@ ApplicationWindow {
     }
 
     function playbackPosition() {
-        if (castMode) {
+        if (videoCastActive) {
             return Math.max(0, castManager.position)
         }
         return Math.max(0, mediaPlayer.position)
     }
 
     function playbackDuration() {
-        if (castMode && castManager.duration > 0) {
+        if (videoCastActive && castManager.duration > 0) {
             return castManager.duration
         }
         return Math.max(0, mediaPlayer.duration)
     }
 
     function playbackIsPlaying() {
-        if (castMode) {
+        if (videoCastActive) {
             return castManager.playing
         }
         return mediaPlayer.playbackState === MediaPlayer.PlayingState
     }
 
     function togglePlayback() {
-        if (castMode) {
+        if (videoCastActive) {
             if (castManager.mediaStopped) {
                 castManager.continueMedia()
             } else if (castManager.playing) {
@@ -590,10 +606,52 @@ ApplicationWindow {
 
         lastKnownPosition = startPosition
         var contentType = castManager.contentTypeForUrl(remoteUrl, currentMediaTitle)
-        return castManager.replaceMedia(remoteUrl,
-                                        contentType,
-                                        currentMediaTitle,
-                                        startPosition)
+        var requestedVolume = castManager.mediaInfoKnown && !castManager.imageMedia
+                ? castManager.volumePercent
+                : playbackVolumePercent
+        return castManager.replaceMediaWithVolume(remoteUrl,
+                                                  contentType,
+                                                  currentMediaTitle,
+                                                  startPosition,
+                                                  requestedVolume)
+    }
+
+    function castRequestedMediaToConnectedDevice(startSlideshow) {
+        if (!castManager.connected || castManager.disconnecting) {
+            return false
+        }
+
+        if (castTargetKind === "picture") {
+            var pictureStarted = castCurrentPictureToConnectedDevice()
+            if (pictureStarted && startSlideshow === true) {
+                castPictureSlideshowRunning = true
+            }
+            return pictureStarted
+        }
+
+        castPictureSlideshowRunning = false
+        var startPosition = mediaPlayer.position > 0
+                ? mediaPlayer.position
+                : Math.max(0, lastKnownPosition)
+        return castCurrentVideoToConnectedDevice(startPosition)
+    }
+
+    function toggleCastPictureSlideshowFromControlPage() {
+        if (castPictureSlideshowRunning) {
+            castPictureSlideshowRunning = false
+            return true
+        }
+
+        if (castTargetKind !== "picture" || pictureQueue.length < 2) {
+            return false
+        }
+
+        if (!castActivePicture) {
+            return castRequestedMediaToConnectedDevice(true)
+        }
+
+        castPictureSlideshowRunning = true
+        return true
     }
 
     function returnToActiveCastMedia() {
@@ -601,7 +659,8 @@ ApplicationWindow {
             return false
         }
 
-        var picture = castTargetKind === "picture" || castManager.imageMedia
+        var picture = castActivePicture
+        castTargetKind = picture ? "picture" : "video"
         if (picture && currentPictureSource && currentPictureSource.length > 0) {
             if (!pageStack.currentPage
                     || pageStack.currentPage.objectName !== "pictureViewerPage") {
@@ -682,7 +741,7 @@ ApplicationWindow {
 
         appSettings.clearDetachedCastSession()
 
-        if (castTargetKind === "picture" || castManager.imageMedia) {
+        if (castActivePicture) {
             castResumeLocalAfterDisconnect = false
             castDisconnectOnly = true
             if (castManager.connected || castManager.casting) {
@@ -715,7 +774,7 @@ ApplicationWindow {
             return
         }
 
-        if (castTargetKind !== "picture" && !castManager.imageMedia) {
+        if (videoCastActive) {
             var remotePosition = playbackPosition()
             if (remotePosition > 0) {
                 lastKnownPosition = remotePosition
@@ -832,7 +891,7 @@ ApplicationWindow {
     }
 
     function leavePlayerView() {
-        if (castMode) {
+        if (videoCastActive) {
             savePlaybackPosition(false)
             return
         }
@@ -854,7 +913,7 @@ ApplicationWindow {
             safeTarget = Math.min(safeTarget, duration - 1000)
         }
 
-        if (castMode) {
+        if (videoCastActive) {
             userSeekPending = true
             playbackStatus = qsTr("Seeking on %1").arg(
                         castManager.deviceName.length > 0
@@ -883,7 +942,7 @@ ApplicationWindow {
             return
         }
 
-        if (castMode) {
+        if (videoCastActive) {
             if (castManager.mediaStopped) {
                 castManager.seek(0)
                 castManager.continueMedia()
@@ -891,7 +950,7 @@ ApplicationWindow {
                 castManager.seek(0)
                 castManager.play()
             }
-            if (castTargetKind !== "picture" && !castManager.imageMedia) {
+            if (videoCastActive) {
                 lastKnownPosition = 0
                 playbackHistory.updatePosition(currentMediaUrl, playbackDuration(), 0)
             }
@@ -1243,14 +1302,14 @@ ApplicationWindow {
     }
 
     function showPreviousVideoControl() {
-        if (castFolderNavigationActive) {
+        if (castFolderNavigationActive && videoCastActive) {
             return openFolderMediaQueueIndex(folderMediaQueueIndex - 1, false)
         }
         return playPreviousVideo()
     }
 
     function showNextVideoControl() {
-        if (castFolderNavigationActive) {
+        if (castFolderNavigationActive && videoCastActive) {
             return openFolderMediaQueueIndex(folderMediaQueueIndex + 1, false)
         }
         return playNextVideo()
@@ -1258,7 +1317,7 @@ ApplicationWindow {
 
     function showPreviousPictureControl() {
         castPictureSlideshowRunning = false
-        if (castFolderNavigationActive) {
+        if (castFolderNavigationActive && castActivePicture) {
             return openFolderMediaQueueIndex(folderMediaQueueIndex - 1, false)
         }
         return showPreviousPicture()
@@ -1266,7 +1325,7 @@ ApplicationWindow {
 
     function showNextPictureControl() {
         castPictureSlideshowRunning = false
-        if (castFolderNavigationActive) {
+        if (castFolderNavigationActive && castActivePicture) {
             return openFolderMediaQueueIndex(folderMediaQueueIndex + 1, false)
         }
         return showNextPicture()
@@ -1277,7 +1336,7 @@ ApplicationWindow {
         if (castFolderNavigationActive) {
             return openFolderMediaQueueIndex(folderMediaQueueIndex - 1, true)
         }
-        if (castTargetKind === "picture" || castManager.imageMedia) {
+        if (castActivePicture) {
             return showPreviousPicture()
         }
         return playPreviousVideo()
@@ -1288,7 +1347,7 @@ ApplicationWindow {
         if (castFolderNavigationActive) {
             return openFolderMediaQueueIndex(folderMediaQueueIndex + 1, true)
         }
-        if (castTargetKind === "picture" || castManager.imageMedia) {
+        if (castActivePicture) {
             return showNextPicture()
         }
         return playNextVideo()
@@ -1297,7 +1356,7 @@ ApplicationWindow {
     function advanceCastPictureSlideshow() {
         if (!castPictureSlideshowRunning
                 || !castMode
-                || !(castTargetKind === "picture" || castManager.imageMedia)
+                || !castActivePicture
                 || pictureQueue.length < 2) {
             castPictureSlideshowRunning = false
             return false
@@ -1396,7 +1455,7 @@ ApplicationWindow {
             return false
         }
 
-        var wasCasting = castMode
+        var wasCasting = videoCastActive
         var deviceName = castManager.deviceName.length > 0
                 ? castManager.deviceName : castLastDeviceName
         var deviceHost = castManager.host.length > 0
@@ -1873,10 +1932,8 @@ ApplicationWindow {
     }
 
     function suspendPlayback() {
-        if (castMode) {
-            if (castTargetKind !== "picture" && !castManager.imageMedia) {
-                savePlaybackPosition(false)
-            }
+        if (videoCastActive) {
+            savePlaybackPosition(false)
             return
         }
 
@@ -1911,13 +1968,11 @@ ApplicationWindow {
             return
         }
 
-        if (!completed && pendingResumeSeek && !castMode) {
+        if (!completed && pendingResumeSeek && !videoCastActive) {
             return
         }
 
-        var videoCast = castMode
-                && castTargetKind !== "picture"
-                && !castManager.imageMedia
+        var videoCast = videoCastActive
         var durationToSave = videoCast && castManager.duration > 0
                 ? castManager.duration
                 : mediaPlayer.duration
@@ -1986,7 +2041,7 @@ ApplicationWindow {
             return
         }
 
-        if (castMode) {
+        if (videoCastActive) {
             playbackStatus = castManager.statusText.length > 0
                     ? castManager.statusText
                     : qsTr("Casting to %1").arg(
@@ -2072,8 +2127,7 @@ ApplicationWindow {
             if (castManager.casting) {
                 castRequested = true
                 castRejoinPending = false
-                castTargetKind = castManager.imageMedia ? "picture" : "video"
-                if (!castManager.imageMedia) {
+                if (castManager.mediaInfoKnown && !castManager.imageMedia) {
                     castPictureSlideshowRunning = false
                 }
                 castLastDeviceName = castManager.deviceName
@@ -2088,27 +2142,30 @@ ApplicationWindow {
         }
 
         onMediaInfoChanged: {
-            if (castManager.casting || castRejoinPending) {
-                castTargetKind = castManager.imageMedia ? "picture" : "video"
+            if (castManager.mediaInfoKnown) {
+                if (castRejoinPending) {
+                    // Rejoin has no page/source intent, so the receiver is the
+                    // only authoritative source for the current media type.
+                    castTargetKind = castManager.imageMedia ? "picture" : "video"
+                }
                 if (!castManager.imageMedia) {
                     castPictureSlideshowRunning = false
                 }
             }
+            updatePlaybackStatus()
         }
 
         onPlayingChanged: updatePlaybackStatus()
 
         onPositionChanged: {
-            if (castMode
-                    && castTargetKind !== "picture"
-                    && !castManager.imageMedia
+            if (videoCastActive
                     && castManager.position > 0) {
                 lastKnownPosition = castManager.position
             }
         }
 
         onStatusTextChanged: {
-            if (castMode) {
+            if (videoCastActive) {
                 updatePlaybackStatus()
             }
         }
@@ -2122,7 +2179,7 @@ ApplicationWindow {
         }
 
         onPlaybackFinished: {
-            if (castTargetKind === "picture" || castManager.imageMedia) {
+            if (castActivePicture) {
                 return
             }
             playbackCompleted = true
@@ -2251,11 +2308,10 @@ ApplicationWindow {
 
     Timer {
         id: castPictureSlideshowTimer
-        interval: 5000
+        interval: Math.max(1, appSettings.pictureSlideshowSeconds) * 1000
         repeat: true
         running: appWindow.castPictureSlideshowRunning
-                 && appWindow.castMode
-                 && (appWindow.castTargetKind === "picture" || castManager.imageMedia)
+                 && appWindow.castActivePicture
                  && appWindow.pictureQueue.length > 1
         onTriggered: appWindow.advanceCastPictureSlideshow()
     }
@@ -2272,8 +2328,8 @@ ApplicationWindow {
         interval: 5000
         repeat: true
         running: appWindow.hasMedia
-                 && ((appWindow.castMode && castManager.playing)
-                     || (!appWindow.castMode
+                 && ((appWindow.videoCastActive && castManager.playing)
+                     || (!appWindow.videoCastActive
                          && !appWindow.playerSuspended
                          && mediaPlayer.playbackState === MediaPlayer.PlayingState))
         onTriggered: appWindow.savePlaybackPosition(false)

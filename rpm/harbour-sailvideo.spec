@@ -1,6 +1,6 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
-Version:    1.1.0.1
+Version:    1.1.0.3
 Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
@@ -57,6 +57,20 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Wed Sep 16 2026 edp17 <edp17@protonmail.com> - 1.1.0.3-1
+- Clear and confirm Chromecast mute state when handing a new video to the receiver
+- Add persistent 3/5/10/15/30 second picture slideshow interval setting
+- Use the slideshow interval for both local and Chromecast picture slideshows
+- Advertise MOV files as MP4-family media for Chromecast-compatible MOV content
+
+* Wed Sep 16 2026 edp17 <edp17@protonmail.com> - 1.1.0.2-1
+- Separate requested Cast source from receiver-confirmed media state
+- Add explicit Cast current video / Cast current picture handover actions
+- Keep Cast Previous/Next controls in a stable position across picture/video transitions
+- Keep local video controls local while a picture remains on Chromecast
+- Wait for receiver volume confirmation before sending the initial video LOAD
+- Preserve mixed-folder and picture-slideshow behaviour across media-type switches
+
 * Wed Sep 16 2026 edp17 <edp17@protonmail.com> - 1.1.0.1-1
 - Start Chromecast video playback at SailVideo's current volume instead of receiver maximum volume
 - Preserve the exact remote position across Stop media -> Start / continue

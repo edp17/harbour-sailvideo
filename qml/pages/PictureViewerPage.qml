@@ -30,9 +30,7 @@ Page {
     property real zoom: 1.0
     property bool controlsVisible: true
     property bool slideshowRunning: false
-    property bool activePictureCast: appWindow.castMode
-                                     && (appWindow.castTargetKind === "picture"
-                                         || castManager.imageMedia)
+    property bool activePictureCast: appWindow.castActivePicture
 
     function slideshowIsRunning() {
         return activePictureCast
@@ -202,12 +200,8 @@ Page {
 
                 Label {
                     width: parent.width
-                    text: (appWindow.castMode
-                           && (appWindow.castTargetKind === "picture"
-                               || castManager.imageMedia)) ? "◉" : "◌"
-                    color: (appWindow.castMode
-                            && (appWindow.castTargetKind === "picture"
-                                || castManager.imageMedia))
+                    text: appWindow.castActivePicture ? "◉" : "◌"
+                    color: appWindow.castActivePicture
                            ? Theme.highlightColor
                            : (castButton.highlighted ? Theme.highlightColor : "white")
                     font.pixelSize: Theme.fontSizeMedium
@@ -308,7 +302,7 @@ Page {
     }
 
     Timer {
-        interval: 5000
+        interval: Math.max(1, appSettings.pictureSlideshowSeconds) * 1000
         repeat: true
         running: page.slideshowRunning && !page.activePictureCast
         onTriggered: page.goNext()

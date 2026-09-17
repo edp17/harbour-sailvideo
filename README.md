@@ -7,7 +7,7 @@ SailVideo is a native Sailfish OS video player intended to support:
 - SMB2/SMB3 NAS shares through bundled libsmb2;
 - additional media-server protocols in later phases.
 
-## Current development release: SailVideo 1.1.0.1
+## Current development release: SailVideo 1.1.0.3
 
 This checkpoint provides:
 
@@ -188,3 +188,43 @@ Local video-only folders keep their existing video queue. Picture-only SMB
 folders keep picture navigation and slideshow semantics. Mixed SMB folders use
 the unified queue only for Cast manual previous/next, while slideshow skips
 videos by design.
+
+## SailVideo 1.1.0.2 — Chromecast media handoff state
+
+This iteration separates two Cast concepts that were previously represented by
+the same flags:
+
+- the media that Chromecast has actually confirmed as active; and
+- the picture or video from which the user opened the Chromecast page.
+
+The Chromecast page therefore keeps controls for the media that is really on
+the TV, while offering an explicit `Cast current video` or `Cast current
+picture` handoff when the user arrives from the other workflow. Previous/Next
+stays in a fixed row so picture/video transitions cannot move Stop/Mute under a
+navigation tap.
+
+Video LOAD is also held until a receiver-status response confirms the requested
+initial volume. Picture display still leaves receiver volume unchanged. Local
+video controls remain local while Chromecast is displaying a picture, and the
+existing mixed-folder manual navigation and picture-only slideshow behaviour
+are retained.
+
+QuickTime/MOV remains a direct Cast source. A `.mov` extension alone does not
+identify the codecs inside the container, so this checkpoint does not blacklist
+or transcode MOV files; receiver codec compatibility remains a separate item.
+
+## SailVideo 1.1.0.3 — final Chromecast polish
+
+This checkpoint contains three focused changes:
+
+- video Cast handoff now clears Chromecast's separate mute flag and waits for
+  both the requested volume and unmuted state to be confirmed before LOAD;
+- Settings adds a persistent picture-slideshow interval (3, 5, 10, 15 or
+  30 seconds), shared by local and Chromecast slideshows;
+- `.mov` sources are advertised to Chromecast as `video/mp4` instead of
+  `video/quicktime`, allowing ISO-BMFF-compatible MOV files containing codecs
+  already supported by the receiver to use the MP4 playback path.
+
+The MOV change is a compatibility path, not transcoding. MOV files containing
+unsupported embedded codecs still require a future transcoding solution.
+

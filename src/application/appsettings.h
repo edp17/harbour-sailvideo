@@ -17,6 +17,7 @@ class AppSettings : public QObject
     Q_PROPERTY(QString storagePath READ storagePath CONSTANT)
     Q_PROPERTY(QString videoFillMode READ videoFillMode WRITE setVideoFillMode NOTIFY videoFillModeChanged)
     Q_PROPERTY(int skipSeconds READ skipSeconds WRITE setSkipSeconds NOTIFY skipSecondsChanged)
+    Q_PROPERTY(int pictureSlideshowSeconds READ pictureSlideshowSeconds WRITE setPictureSlideshowSeconds NOTIFY pictureSlideshowSecondsChanged)
     Q_PROPERTY(bool keepDisplayOn READ keepDisplayOn WRITE setKeepDisplayOn NOTIFY keepDisplayOnChanged)
     Q_PROPERTY(bool nasShowOnlyVideos READ nasShowOnlyVideos WRITE setNasShowOnlyVideos NOTIFY nasShowOnlyVideosChanged)
     Q_PROPERTY(bool nasShowHiddenFiles READ nasShowHiddenFiles WRITE setNasShowHiddenFiles NOTIFY nasShowHiddenFilesChanged)
@@ -45,6 +46,8 @@ public:
     void setVideoFillMode(const QString &mode);
     int skipSeconds() const;
     void setSkipSeconds(int seconds);
+    int pictureSlideshowSeconds() const;
+    void setPictureSlideshowSeconds(int seconds);
     bool keepDisplayOn() const;
     void setKeepDisplayOn(bool enabled);
     bool nasShowOnlyVideos() const;
@@ -94,6 +97,7 @@ public:
 signals:
     void videoFillModeChanged();
     void skipSecondsChanged();
+    void pictureSlideshowSecondsChanged();
     void keepDisplayOnChanged();
     void nasShowOnlyVideosChanged();
     void nasShowHiddenFilesChanged();
@@ -107,6 +111,7 @@ private:
     void scheduleSave();
     static QString normalizedFillMode(const QString &mode);
     static int normalizedSkipSeconds(int seconds);
+    static int normalizedPictureSlideshowSeconds(int seconds);
     static int normalizedPercent(int percent, int minimum, int fallback);
     static QString cleanedText(const QString &value);
     static QString normalizedPath(const QString &path);
@@ -115,6 +120,7 @@ private:
     QTimer m_saveTimer;
     QString m_videoFillMode = QStringLiteral("fit");
     int m_skipSeconds = 10;
+    int m_pictureSlideshowSeconds = 5;
     bool m_keepDisplayOn = true;
     bool m_nasShowOnlyVideos = false;
     bool m_nasShowHiddenFiles = false;

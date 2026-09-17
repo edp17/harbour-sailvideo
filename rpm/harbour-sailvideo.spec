@@ -1,6 +1,6 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
-Version:    1.1.0.3
+Version:    1.1.0.4
 Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
@@ -57,6 +57,12 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Thu Sep 17 2026 edp17 <edp17@protonmail.com> - 1.1.0.4-1
+- Move Chromecast selection and controls onto the video/picture pages
+- Keep Settings directly accessible from media-page pulley menus
+- Reject MOV before Chromecast LOAD with an unsupported-format message
+- Open SMB streams before HTTP success and retry one cold NAS open automatically
+
 * Wed Sep 16 2026 edp17 <edp17@protonmail.com> - 1.1.0.3-1
 - Clear and confirm Chromecast mute state when handing a new video to the receiver
 - Add persistent 3/5/10/15/30 second picture slideshow interval setting

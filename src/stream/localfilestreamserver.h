@@ -136,7 +136,8 @@ private:
                        qint64 start,
                        qint64 end,
                        bool partial,
-                       bool headOnly);
+                       bool headOnly,
+                       bool allowSmbRetry = true);
     void pumpClientData(QTcpSocket *socket);
     void closeTransfer(QTcpSocket *socket);
 

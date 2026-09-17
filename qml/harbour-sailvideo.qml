@@ -368,28 +368,80 @@ ApplicationWindow {
         }
     }
 
-    function openCastDevices() {
-        if (!hasMedia) {
-            return
-        }
-
-        castTargetKind = "video"
+    function prepareCastTarget(kind) {
+        castTargetKind = kind === "picture" ? "picture" : "video"
         if (castDeviceModel.count === 0 && !castDeviceModel.discovering) {
             castDeviceModel.startDiscovery()
         }
-        pageStack.push(Qt.resolvedUrl("pages/CastDevicesPage.qml"))
+    }
+
+    function openCastDevices() {
+        if (hasMedia) {
+            prepareCastTarget("video")
+        }
     }
 
     function openCastDevicesForPicture() {
-        if (!currentPictureSource || currentPictureSource.length === 0) {
-            return
+        if (currentPictureSource && currentPictureSource.length > 0) {
+            prepareCastTarget("picture")
+        }
+    }
+
+    function valueEndsWithIgnoreCase(value, suffix) {
+        var text = cleanedValue(value).toLowerCase()
+        var ending = cleanedValue(suffix).toLowerCase()
+        return ending.length > 0
+                && text.length >= ending.length
+                && text.lastIndexOf(ending) === text.length - ending.length
+    }
+
+    function castVideoFormatSupported(title, mediaUrl) {
+        var cleanUrl = cleanedValue(mediaUrl)
+        var query = cleanUrl.indexOf("?")
+        if (query >= 0) cleanUrl = cleanUrl.substring(0, query)
+        var fragment = cleanUrl.indexOf("#")
+        if (fragment >= 0) cleanUrl = cleanUrl.substring(0, fragment)
+
+        return !valueEndsWithIgnoreCase(title, ".mov")
+                && !valueEndsWithIgnoreCase(cleanUrl, ".mov")
+    }
+
+    function rejectUnsupportedCastVideo() {
+        playbackError = qsTr("This video format is not supported by Chromecast.")
+        playbackStatus = playbackError
+        return false
+    }
+
+    function castFromMediaPage(kind, deviceName, host, port) {
+        var targetKind = kind === "picture" ? "picture" : "video"
+        castTargetKind = targetKind
+
+        if (targetKind === "video"
+                && !castVideoFormatSupported(currentMediaTitle, currentMediaUrl)) {
+            return rejectUnsupportedCastVideo()
         }
 
-        castTargetKind = "picture"
-        if (castDeviceModel.count === 0 && !castDeviceModel.discovering) {
-            castDeviceModel.startDiscovery()
+        var cleanHost = cleanedValue(host)
+        var cleanPort = port > 0 ? port : 8009
+
+        if (castManager.connected) {
+            var sameDevice = cleanHost === cleanedValue(castManager.host)
+                    && cleanPort === (castManager.port > 0 ? castManager.port : 8009)
+            if (sameDevice) {
+                return castRequestedMediaToConnectedDevice(false)
+            }
+            playbackError = qsTr("Disconnect the current Chromecast before selecting another device.")
+            playbackStatus = playbackError
+            return false
         }
-        pageStack.push(Qt.resolvedUrl("pages/CastDevicesPage.qml"))
+
+        if (castRequested || castManager.disconnecting) {
+            playbackError = qsTr("Chromecast is still changing connection state.")
+            playbackStatus = playbackError
+            return false
+        }
+
+        return startCastingToDevice(deviceName, cleanHost, cleanPort)
     }
 
     function castUrlForCurrentMedia(peerHost) {
@@ -469,6 +521,11 @@ ApplicationWindow {
                 || (picture && (!currentPictureSource || currentPictureSource.length === 0))
                 || castManager.disconnecting) {
             return false
+        }
+
+        if (!picture
+                && !castVideoFormatSupported(currentMediaTitle, currentMediaUrl)) {
+            return rejectUnsupportedCastVideo()
         }
 
         var cleanHost = cleanedValue(host)
@@ -587,6 +644,10 @@ ApplicationWindow {
             return false
         }
 
+        if (!castVideoFormatSupported(currentMediaTitle, currentMediaUrl)) {
+            return rejectUnsupportedCastVideo()
+        }
+
         var remoteUrl = castUrlForCurrentMedia(castManager.host)
         if (!remoteUrl || remoteUrl.length === 0) {
             playbackError = localFileStreamServer.lastError.length > 0
@@ -677,10 +738,6 @@ ApplicationWindow {
             return true
         }
 
-        if (!pageStack.currentPage
-                || pageStack.currentPage.objectName !== "castDevicesPage") {
-            pageStack.push(Qt.resolvedUrl("pages/CastDevicesPage.qml"))
-        }
         return false
     }
 
@@ -826,12 +883,6 @@ ApplicationWindow {
                     castLastDeviceName.length > 0
                     ? castLastDeviceName
                     : qsTr("Chromecast"))
-
-        if (openPage
-                && (!pageStack.currentPage
-                    || pageStack.currentPage.objectName !== "castDevicesPage")) {
-            pageStack.push(Qt.resolvedUrl("pages/CastDevicesPage.qml"))
-        }
 
         var started = castManager.rejoin(castLastDeviceName,
                                          castLastHost,
@@ -1273,6 +1324,12 @@ ApplicationWindow {
         }
 
         var wasCasting = castMode && castManager.connected
+        if (wasCasting
+                && item.mediaType === "video"
+                && !castVideoFormatSupported(item.title, item.path)) {
+            return rejectUnsupportedCastVideo()
+        }
+
         folderMediaQueueIndex = index
         keepCastControlPageDuringQueueSwitch = stayOnCastPage === true
         remoteQueueSwitch = wasCasting
@@ -2320,7 +2377,7 @@ ApplicationWindow {
         id: castRejoinStartupTimer
         interval: 100
         repeat: false
-        onTriggered: appWindow.tryRejoinDetachedCast(true)
+        onTriggered: appWindow.tryRejoinDetachedCast(false)
     }
 
     Timer {

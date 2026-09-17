@@ -17,7 +17,9 @@
 #include <QMimeType>
 #include <QNetworkAddressEntry>
 #include <QNetworkInterface>
+#include <QPointer>
 #include <QTcpSocket>
+#include <QTimer>
 #include <QUrl>
 #include <QUuid>
 
@@ -865,10 +867,73 @@ void LocalFileStreamServer::startTransfer(QTcpSocket *socket,
                                           qint64 start,
                                           qint64 end,
                                           bool partial,
-                                          bool headOnly)
+                                          bool headOnly,
+                                          bool allowSmbRetry)
 {
+    if (!socket) return;
+
     const qint64 contentLength = entry.size > 0 ? end - start + 1 : 0;
     const int statusCode = partial ? 206 : 200;
+    Transfer *transfer = nullptr;
+
+    if (!headOnly && contentLength > 0) {
+        transfer = new Transfer;
+        transfer->remaining = contentLength;
+        transfer->nextOffset = start;
+
+        if (entry.type == StreamType::LocalFile) {
+            QFile *file = new QFile(entry.filePath, this);
+            if (!file->open(QIODevice::ReadOnly) || !file->seek(start)) {
+                delete file;
+                delete transfer;
+                sendSimpleResponse(socket, 404, reasonPhrase(404),
+                                   tr("The selected local file could not be opened.").toUtf8());
+                return;
+            }
+            transfer->file = file;
+        } else {
+            QString error;
+            transfer->smbReader = m_smbBackend->openFile(entry.smbHost,
+                                                         entry.smbPort,
+                                                         entry.smbShare,
+                                                         entry.smbPath,
+                                                         entry.smbDomain,
+                                                         entry.smbUsername,
+                                                         entry.smbPassword,
+                                                         entry.smbGuest,
+                                                         &error);
+            if (!transfer->smbReader || !transfer->smbReader->isOpen()) {
+                const QString message = error.isEmpty()
+                        ? tr("Could not open SMB file stream.")
+                        : error;
+                delete transfer;
+                setLastError(message);
+
+                if (allowSmbRetry) {
+                    QPointer<QTcpSocket> guardedSocket(socket);
+                    qInfo() << "SailVideo SMB bridge: initial file open failed;"
+                            << "retrying once after cold-NAS delay";
+                    QTimer::singleShot(800, this,
+                                       [this, guardedSocket, entry, start, end, partial, headOnly]() {
+                        if (!guardedSocket
+                                || guardedSocket->state() == QAbstractSocket::UnconnectedState) {
+                            return;
+                        }
+                        qInfo() << "SailVideo SMB bridge: retrying file open";
+                        startTransfer(guardedSocket.data(), entry, start, end,
+                                      partial, headOnly, false);
+                    });
+                    return;
+                }
+
+                qWarning() << "SailVideo SMB bridge: file open failed after retry";
+                sendSimpleResponse(socket, 500, reasonPhrase(500), message.toUtf8());
+                return;
+            }
+        }
+    }
+
+    setLastError(QString());
 
     QByteArray response;
     response += "HTTP/1.1 " + QByteArray::number(statusCode) + " "
@@ -889,40 +954,9 @@ void LocalFileStreamServer::startTransfer(QTcpSocket *socket,
     socket->write(response);
 
     if (headOnly || contentLength <= 0) {
+        delete transfer;
         socket->disconnectFromHost();
         return;
-    }
-
-    Transfer *transfer = new Transfer;
-    transfer->remaining = contentLength;
-    transfer->nextOffset = start;
-
-    if (entry.type == StreamType::LocalFile) {
-        QFile *file = new QFile(entry.filePath, this);
-        if (!file->open(QIODevice::ReadOnly) || !file->seek(start)) {
-            delete file;
-            delete transfer;
-            socket->disconnectFromHost();
-            return;
-        }
-        transfer->file = file;
-    } else {
-        QString error;
-        transfer->smbReader = m_smbBackend->openFile(entry.smbHost,
-                                                     entry.smbPort,
-                                                     entry.smbShare,
-                                                     entry.smbPath,
-                                                     entry.smbDomain,
-                                                     entry.smbUsername,
-                                                     entry.smbPassword,
-                                                     entry.smbGuest,
-                                                     &error);
-        if (!transfer->smbReader || !transfer->smbReader->isOpen()) {
-            setLastError(error.isEmpty() ? tr("Could not open SMB file stream.") : error);
-            delete transfer;
-            socket->disconnectFromHost();
-            return;
-        }
     }
 
     m_transfers.insert(socket, transfer);

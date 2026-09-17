@@ -18,6 +18,7 @@
 */
 import QtQuick 2.0
 import Sailfish.Silica 1.0
+import "../components"
 
 Page {
     id: page
@@ -100,27 +101,19 @@ Page {
         contentWidth: Math.max(width, imageItem.width)
         contentHeight: Math.max(height, imageItem.height)
 
-        PullDownMenu {
+        CastPulleyMenu {
+            sourceKind: "picture"
+        }
+
+        PushUpMenu {
             MenuItem {
                 visible: page.activePictureCast
                          ? appWindow.pictureQueue.length > 1
                          : (appWindow.hasNextPicture || appWindow.hasPreviousPicture)
-                text: page.slideshowIsRunning() ? qsTr("Stop slideshow") : qsTr("Start slideshow")
+                text: page.slideshowIsRunning()
+                      ? qsTr("Stop slideshow")
+                      : qsTr("Start slideshow")
                 onClicked: page.toggleSlideshow()
-            }
-            MenuItem {
-                visible: page.activePictureCast
-                         ? appWindow.hasNextPictureControl
-                         : appWindow.hasNextPicture
-                text: page.activePictureCast ? qsTr("Next media") : qsTr("Next picture")
-                onClicked: page.goNext()
-            }
-            MenuItem {
-                visible: page.activePictureCast
-                         ? appWindow.hasPreviousPictureControl
-                         : appWindow.hasPreviousPicture
-                text: page.activePictureCast ? qsTr("Previous media") : qsTr("Previous picture")
-                onClicked: page.goPrevious()
             }
             MenuItem {
                 text: qsTr("Fit to screen")
@@ -160,6 +153,7 @@ Page {
     }
 
     Rectangle {
+        id: topPanel
         visible: page.controlsVisible
         anchors {
             top: parent.top
@@ -180,56 +174,29 @@ Page {
             onClicked: pageStack.pop()
         }
 
-        BackgroundItem {
-            id: castButton
-
-            anchors {
-                right: parent.right
-                rightMargin: Theme.paddingSmall
-                verticalCenter: parent.verticalCenter
-            }
-            width: Theme.itemSizeMedium
-            height: Theme.itemSizeMedium
-
-            onClicked: appWindow.openCastDevicesForPicture()
-
-            Column {
-                anchors.centerIn: parent
-                width: parent.width
-                spacing: 0
-
-                Label {
-                    width: parent.width
-                    text: appWindow.castActivePicture ? "◉" : "◌"
-                    color: appWindow.castActivePicture
-                           ? Theme.highlightColor
-                           : (castButton.highlighted ? Theme.highlightColor : "white")
-                    font.pixelSize: Theme.fontSizeMedium
-                    horizontalAlignment: Text.AlignHCenter
-                }
-
-                Label {
-                    width: parent.width
-                    text: qsTr("Cast")
-                    color: "white"
-                    font.pixelSize: Theme.fontSizeTiny
-                    horizontalAlignment: Text.AlignHCenter
-                }
-            }
-        }
-
         Label {
             anchors {
                 left: backButton.right
-                right: castButton.left
+                right: parent.right
                 leftMargin: Theme.paddingSmall
-                rightMargin: Theme.paddingSmall
+                rightMargin: Theme.horizontalPageMargin
                 verticalCenter: parent.verticalCenter
             }
             text: page.pictureTitle.length > 0 ? page.pictureTitle : qsTr("Picture")
             color: "white"
             truncationMode: TruncationMode.Fade
         }
+    }
+
+    CastControlOverlay {
+        sourceKind: "picture"
+        controlsVisible: page.controlsVisible
+        anchors {
+            top: topPanel.bottom
+            horizontalCenter: parent.horizontalCenter
+            topMargin: Theme.paddingSmall
+        }
+        z: 20
     }
 
     Rectangle {

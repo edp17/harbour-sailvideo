@@ -104,7 +104,7 @@ Page {
                     if (appWindow.castMode) {
                         appWindow.returnToActiveCastMedia()
                     } else {
-                        appWindow.tryRejoinDetachedCast(true)
+                        appWindow.tryRejoinDetachedCast(false)
                     }
                 }
 

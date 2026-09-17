@@ -19,6 +19,7 @@
 import QtQuick 2.0
 import QtMultimedia 5.0
 import Sailfish.Silica 1.0
+import "../components"
 
 Page {
     id: page
@@ -333,104 +334,69 @@ Page {
         }
     }
 
-    Rectangle {
-        id: topPanel
-
-        visible: page.controlsVisible
+    SilicaFlickable {
+        id: topMenuFlickable
         anchors {
             top: parent.top
             left: parent.left
             right: parent.right
         }
         height: Theme.itemSizeLarge
-        color: "#99000000"
+        contentWidth: width
+        contentHeight: height
+        flickableDirection: Flickable.VerticalFlick
+        clip: false
+        z: 30
 
-        IconButton {
-            id: backButton
-
-            anchors {
-                left: parent.left
-                leftMargin: Theme.paddingSmall
-                verticalCenter: parent.verticalCenter
-            }
-            icon.source: "image://theme/icon-m-back"
-
-            onClicked: {
-                page.leavePlayer()
-                pageStack.pop()
-            }
+        CastPulleyMenu {
+            sourceKind: "video"
         }
 
-        BackgroundItem {
-            id: castButton
+        Rectangle {
+            id: topPanel
+            width: topMenuFlickable.width
+            height: topMenuFlickable.height
+            visible: page.controlsVisible
+            color: "#99000000"
 
-            anchors {
-                right: parent.right
-                rightMargin: Theme.paddingSmall
-                verticalCenter: parent.verticalCenter
-            }
-            width: Theme.itemSizeLarge
-            height: Theme.itemSizeMedium
-            onClicked: appWindow.openCastDevices()
-
-            Column {
-                anchors.centerIn: parent
-                width: parent.width
-                spacing: 0
-
-                Label {
-                    width: parent.width
-                    text: appWindow.videoCastActive ? "◉" : "◌"
-                    color: appWindow.videoCastActive
-                           ? Theme.highlightColor
-                           : (castButton.highlighted ? Theme.highlightColor : "white")
-                    font.pixelSize: Theme.fontSizeLarge
-                    horizontalAlignment: Text.AlignHCenter
+            IconButton {
+                id: backButton
+                anchors {
+                    left: parent.left
+                    leftMargin: Theme.paddingSmall
+                    verticalCenter: parent.verticalCenter
                 }
-
-                Label {
-                    width: parent.width
-                    text: qsTr("Cast")
-                    color: appWindow.videoCastActive ? Theme.highlightColor : "white"
-                    font.pixelSize: Theme.fontSizeTiny
-                    horizontalAlignment: Text.AlignHCenter
+                icon.source: "image://theme/icon-m-back"
+                onClicked: {
+                    page.leavePlayer()
+                    pageStack.pop()
                 }
             }
-        }
-
-        Column {
-            anchors {
-                left: backButton.right
-                right: castButton.left
-                leftMargin: Theme.paddingSmall
-                rightMargin: Theme.paddingSmall
-                verticalCenter: parent.verticalCenter
-            }
-            spacing: 0
 
             Label {
-                width: parent.width
+                anchors {
+                    left: backButton.right
+                    right: parent.right
+                    leftMargin: Theme.paddingSmall
+                    rightMargin: Theme.horizontalPageMargin
+                    verticalCenter: parent.verticalCenter
+                }
                 text: appWindow.currentMediaTitle
                 color: "white"
                 truncationMode: TruncationMode.Fade
             }
-
-            Label {
-                visible: appWindow.castMode
-                width: parent.width
-                text: appWindow.videoCastActive
-                      ? qsTr("Casting to %1").arg(
-                            castManager.deviceName.length > 0
-                            ? castManager.deviceName
-                            : appWindow.castLastDeviceName)
-                      : qsTr("Chromecast is displaying a picture")
-                color: appWindow.videoCastActive
-                       ? Theme.highlightColor
-                       : Theme.secondaryColor
-                font.pixelSize: Theme.fontSizeTiny
-                truncationMode: TruncationMode.Fade
-            }
         }
+    }
+
+    CastControlOverlay {
+        sourceKind: "video"
+        controlsVisible: page.controlsVisible
+        anchors {
+            top: topMenuFlickable.bottom
+            horizontalCenter: parent.horizontalCenter
+            topMargin: Theme.paddingSmall
+        }
+        z: 29
     }
 
     Rectangle {

@@ -9,6 +9,7 @@ Rectangle {
     id: root
     property string sourceKind: "video"
     property bool controlsVisible: true
+    property bool menuActive: false
     property bool pageIsPicture: sourceKind === "picture"
     property bool activeMatchesPage: appWindow.castMode
                                      && (pageIsPicture
@@ -16,8 +17,15 @@ Rectangle {
                                          : appWindow.videoCastActive)
 
     visible: appWindow.castMode && controlsVisible
+    opacity: menuActive ? 0.15 : 1.0
+    enabled: !menuActive
+
+    Behavior on opacity {
+        NumberAnimation { duration: 120 }
+    }
+
     width: Math.min(parent ? parent.width - 2 * Theme.horizontalPageMargin : 0,
-                    Math.max(Theme.itemSizeLarge * 3,
+                    Math.max(Theme.itemSizeLarge * 2,
                              controlColumn.implicitWidth + 2 * Theme.paddingMedium))
     height: controlColumn.height + 2 * Theme.paddingSmall
     radius: Theme.paddingSmall
@@ -91,12 +99,13 @@ Rectangle {
                     appWindow.toggleCastPictureSlideshowFromControlPage()
                 }
             }
+        }
 
-            Button {
-                text: qsTr("Disconnect")
-                enabled: !castManager.disconnecting
-                onClicked: appWindow.disconnectCastAndResume()
-            }
+        Button {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: qsTr("Disconnect")
+            enabled: !castManager.disconnecting
+            onClicked: appWindow.disconnectCastAndResume()
         }
 
         Label {

@@ -346,10 +346,17 @@ Page {
         contentHeight: height
         flickableDirection: Flickable.VerticalFlick
         clip: false
-        z: 30
+        z: 1000
 
         CastPulleyMenu {
+            id: castPulleyMenu
             sourceKind: "video"
+
+            onActiveChanged: {
+                if (active) {
+                    page.controlsVisible = true
+                }
+            }
         }
 
         Rectangle {
@@ -391,12 +398,61 @@ Page {
     CastControlOverlay {
         sourceKind: "video"
         controlsVisible: page.controlsVisible
+        menuActive: castPulleyMenu.active
         anchors {
             top: topMenuFlickable.bottom
             horizontalCenter: parent.horizontalCenter
             topMargin: Theme.paddingSmall
         }
-        z: 29
+        z: 20
+    }
+
+    Rectangle {
+        visible: appWindow.castMode && appWindow.castUnsupportedVideoVisible
+        anchors.fill: parent
+        color: "black"
+        z: 10
+
+        Column {
+            anchors.centerIn: parent
+            width: parent.width - 2 * Theme.horizontalPageMargin
+            spacing: Theme.paddingMedium
+
+            Label {
+                width: parent.width
+                text: "⚠"
+                color: Theme.errorColor
+                font.pixelSize: Theme.fontSizeHuge
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Label {
+                width: parent.width
+                text: qsTr("Unsupported video")
+                color: "white"
+                font.pixelSize: Theme.fontSizeLarge
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Label {
+                visible: appWindow.castUnsupportedVideoTitle.length > 0
+                width: parent.width
+                text: appWindow.castUnsupportedVideoTitle
+                color: Theme.secondaryColor
+                font.pixelSize: Theme.fontSizeSmall
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+            }
+
+            Label {
+                width: parent.width
+                text: qsTr("This video format is not supported by Chromecast.")
+                color: Theme.secondaryColor
+                font.pixelSize: Theme.fontSizeSmall
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+            }
+        }
     }
 
     Rectangle {
@@ -465,6 +521,13 @@ Page {
         }
         height: controlsColumn.height + 2 * Theme.paddingMedium
         color: "#aa000000"
+        z: 30
+        opacity: castPulleyMenu.active ? 0.15 : 1.0
+        enabled: !castPulleyMenu.active
+
+        Behavior on opacity {
+            NumberAnimation { duration: 120 }
+        }
 
         Column {
             id: controlsColumn
@@ -704,9 +767,9 @@ Page {
 
         interval: 4000
         repeat: false
-        running: page.controlsVisible
+        running: page.controlsVisible && !castPulleyMenu.active
         onTriggered: {
-            if (appWindow.playbackIsPlaying()) {
+            if (appWindow.playbackIsPlaying() && !castPulleyMenu.active) {
                 page.controlsVisible = false
             }
         }

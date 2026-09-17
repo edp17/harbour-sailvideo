@@ -87,6 +87,8 @@ ApplicationWindow {
                                          ? hasNextFolderMedia
                                          : hasNextPicture
     property bool castPictureSlideshowRunning: false
+    property bool castUnsupportedVideoVisible: false
+    property string castUnsupportedVideoTitle: ""
     property bool remoteQueueSwitch: false
     property bool keepCastControlPageDuringQueueSwitch: false
 
@@ -406,7 +408,21 @@ ApplicationWindow {
                 && !valueEndsWithIgnoreCase(cleanUrl, ".mov")
     }
 
-    function rejectUnsupportedCastVideo() {
+    function clearUnsupportedCastVideo() {
+        var unsupportedText = qsTr("This video format is not supported by Chromecast.")
+        castUnsupportedVideoVisible = false
+        castUnsupportedVideoTitle = ""
+        if (playbackError === unsupportedText) {
+            playbackError = ""
+        }
+        if (playbackStatus === unsupportedText) {
+            playbackStatus = ""
+        }
+    }
+
+    function rejectUnsupportedCastVideo(title) {
+        castUnsupportedVideoVisible = true
+        castUnsupportedVideoTitle = cleanedValue(title)
         playbackError = qsTr("This video format is not supported by Chromecast.")
         playbackStatus = playbackError
         return false
@@ -418,7 +434,7 @@ ApplicationWindow {
 
         if (targetKind === "video"
                 && !castVideoFormatSupported(currentMediaTitle, currentMediaUrl)) {
-            return rejectUnsupportedCastVideo()
+            return rejectUnsupportedCastVideo(currentMediaTitle)
         }
 
         var cleanHost = cleanedValue(host)
@@ -525,9 +541,10 @@ ApplicationWindow {
 
         if (!picture
                 && !castVideoFormatSupported(currentMediaTitle, currentMediaUrl)) {
-            return rejectUnsupportedCastVideo()
+            return rejectUnsupportedCastVideo(currentMediaTitle)
         }
 
+        clearUnsupportedCastVideo()
         var cleanHost = cleanedValue(host)
         if (cleanHost.length === 0) {
             playbackError = qsTr("The Chromecast address is missing.")
@@ -621,6 +638,7 @@ ApplicationWindow {
             return false
         }
 
+        clearUnsupportedCastVideo()
         var remoteUrl = castUrlForCurrentPicture(castManager.host)
         if (!remoteUrl || remoteUrl.length === 0) {
             playbackError = localFileStreamServer.lastError.length > 0
@@ -645,9 +663,10 @@ ApplicationWindow {
         }
 
         if (!castVideoFormatSupported(currentMediaTitle, currentMediaUrl)) {
-            return rejectUnsupportedCastVideo()
+            return rejectUnsupportedCastVideo(currentMediaTitle)
         }
 
+        clearUnsupportedCastVideo()
         var remoteUrl = castUrlForCurrentMedia(castManager.host)
         if (!remoteUrl || remoteUrl.length === 0) {
             playbackError = localFileStreamServer.lastError.length > 0
@@ -1327,7 +1346,9 @@ ApplicationWindow {
         if (wasCasting
                 && item.mediaType === "video"
                 && !castVideoFormatSupported(item.title, item.path)) {
-            return rejectUnsupportedCastVideo()
+            folderMediaQueueIndex = index
+            castTargetKind = "video"
+            return rejectUnsupportedCastVideo(item.title)
         }
 
         folderMediaQueueIndex = index
@@ -1779,6 +1800,7 @@ ApplicationWindow {
         currentPictureSmbSize = localFileStreamServer.lastResolvedSize > 0
                 ? localFileStreamServer.lastResolvedSize
                 : (size > 0 ? size : 0)
+        clearUnsupportedCastVideo()
         currentPictureTitle = pictureTitle
         currentPictureSource = streamUrl
         syncSmbQueueIndices(cleanPath, "picture")
@@ -1851,6 +1873,7 @@ ApplicationWindow {
             resume = playbackHistory.resumePosition(cleanSourceUrl)
         }
 
+        clearUnsupportedCastVideo()
         playbackError = ""
         playbackStatus = qsTr("Opening")
         playerSuspended = false

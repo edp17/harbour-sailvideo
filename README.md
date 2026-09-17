@@ -7,7 +7,7 @@ SailVideo is a native Sailfish OS video player intended to support:
 - SMB2/SMB3 NAS shares through bundled libsmb2;
 - additional media-server protocols in later phases.
 
-## Current development release: SailVideo 1.1.0.4
+## Current development release: SailVideo 1.1.0.5
 
 This checkpoint provides:
 
@@ -244,3 +244,13 @@ Chromecast is integrated directly into the video player and picture viewer.
 The old CastDevicesPage remains installed as fallback code, but the normal
 workflow no longer navigates to it.
 
+## SailVideo 1.1.0.5 — Chromecast UI polish
+
+- Player and Picture Viewer pulley menus render above the compact Cast overlay.
+- Video Cast controls use portrait-safe geometry with Disconnect on its own row.
+- Unsupported MOV Cast attempts show a black warning placeholder on the phone
+  instead of leaving the previous picture visible.
+- Mixed-folder navigation advances logically to the blocked MOV entry, allowing
+  Previous/Next to continue while Chromecast keeps the last valid media.
+- While a media-page pulley menu is active, underlying playback/Cast controls
+  dim and are temporarily disabled, and the player auto-hide timer is paused.

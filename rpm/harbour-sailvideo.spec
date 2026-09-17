@@ -1,6 +1,6 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
-Version:    1.1.0.4
+Version:    1.1.0.5
 Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
@@ -57,6 +57,14 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Thu Sep 17 2026 edp17 <edp17@protonmail.com> - 1.1.0.5-1
+- Keep Player and Picture Viewer pulley menus above Chromecast controls
+- Use portrait-safe Chromecast control geometry
+- Show a black unsupported-video placeholder for blocked MOV Cast items
+- Keep mixed-folder navigation moving past unsupported Cast videos
+- Dim playback/Cast controls while a pulley menu is open
+- Keep player controls visible for the full lifetime of an open pulley menu
+
 * Thu Sep 17 2026 edp17 <edp17@protonmail.com> - 1.1.0.4-1
 - Move Chromecast selection and controls onto the video/picture pages
 - Keep Settings directly accessible from media-page pulley menus

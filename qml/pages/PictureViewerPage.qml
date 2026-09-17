@@ -101,10 +101,6 @@ Page {
         contentWidth: Math.max(width, imageItem.width)
         contentHeight: Math.max(height, imageItem.height)
 
-        CastPulleyMenu {
-            sourceKind: "picture"
-        }
-
         PushUpMenu {
             MenuItem {
                 visible: page.activePictureCast
@@ -152,51 +148,122 @@ Page {
         }
     }
 
-    Rectangle {
-        id: topPanel
-        visible: page.controlsVisible
+    SilicaFlickable {
+        id: topMenuFlickable
         anchors {
             top: parent.top
             left: parent.left
             right: parent.right
         }
         height: Theme.itemSizeLarge
-        color: "#99000000"
+        contentWidth: width
+        contentHeight: height
+        flickableDirection: Flickable.VerticalFlick
+        clip: false
+        z: 1000
 
-        IconButton {
-            id: backButton
-            anchors {
-                left: parent.left
-                leftMargin: Theme.paddingSmall
-                verticalCenter: parent.verticalCenter
+        CastPulleyMenu {
+            id: castPulleyMenu
+            sourceKind: "picture"
+
+            onActiveChanged: {
+                if (active) {
+                    page.controlsVisible = true
+                }
             }
-            icon.source: "image://theme/icon-m-back"
-            onClicked: pageStack.pop()
         }
 
-        Label {
-            anchors {
-                left: backButton.right
-                right: parent.right
-                leftMargin: Theme.paddingSmall
-                rightMargin: Theme.horizontalPageMargin
-                verticalCenter: parent.verticalCenter
+        Rectangle {
+            id: topPanel
+            width: topMenuFlickable.width
+            height: topMenuFlickable.height
+            visible: page.controlsVisible
+            color: "#99000000"
+
+            IconButton {
+                id: backButton
+                anchors {
+                    left: parent.left
+                    leftMargin: Theme.paddingSmall
+                    verticalCenter: parent.verticalCenter
+                }
+                icon.source: "image://theme/icon-m-back"
+                onClicked: pageStack.pop()
             }
-            text: page.pictureTitle.length > 0 ? page.pictureTitle : qsTr("Picture")
-            color: "white"
-            truncationMode: TruncationMode.Fade
+
+            Label {
+                anchors {
+                    left: backButton.right
+                    right: parent.right
+                    leftMargin: Theme.paddingSmall
+                    rightMargin: Theme.horizontalPageMargin
+                    verticalCenter: parent.verticalCenter
+                }
+                text: page.pictureTitle.length > 0 ? page.pictureTitle : qsTr("Picture")
+                color: "white"
+                truncationMode: TruncationMode.Fade
+            }
         }
     }
 
     CastControlOverlay {
         sourceKind: "picture"
         controlsVisible: page.controlsVisible
+        menuActive: castPulleyMenu.active
         anchors {
-            top: topPanel.bottom
+            top: topMenuFlickable.bottom
             horizontalCenter: parent.horizontalCenter
             topMargin: Theme.paddingSmall
         }
         z: 20
+    }
+
+    Rectangle {
+        visible: appWindow.castMode && appWindow.castUnsupportedVideoVisible
+        anchors.fill: parent
+        color: "black"
+        z: 10
+
+        Column {
+            anchors.centerIn: parent
+            width: parent.width - 2 * Theme.horizontalPageMargin
+            spacing: Theme.paddingMedium
+
+            Label {
+                width: parent.width
+                text: "⚠"
+                color: Theme.errorColor
+                font.pixelSize: Theme.fontSizeHuge
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Label {
+                width: parent.width
+                text: qsTr("Unsupported video")
+                color: "white"
+                font.pixelSize: Theme.fontSizeLarge
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Label {
+                visible: appWindow.castUnsupportedVideoTitle.length > 0
+                width: parent.width
+                text: appWindow.castUnsupportedVideoTitle
+                color: Theme.secondaryColor
+                font.pixelSize: Theme.fontSizeSmall
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+            }
+
+            Label {
+                width: parent.width
+                text: qsTr("This video format is not supported by Chromecast.")
+                color: Theme.secondaryColor
+                font.pixelSize: Theme.fontSizeSmall
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+            }
+        }
     }
 
     Rectangle {
@@ -211,6 +278,13 @@ Page {
         }
         height: Theme.itemSizeLarge
         color: "#99000000"
+        z: 30
+        opacity: castPulleyMenu.active ? 0.15 : 1.0
+        enabled: !castPulleyMenu.active
+
+        Behavior on opacity {
+            NumberAnimation { duration: 120 }
+        }
 
         Row {
             anchors.centerIn: parent

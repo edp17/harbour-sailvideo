@@ -25,10 +25,8 @@ Page {
 
     allowedOrientations: Orientation.All
 
-    // Prefer the C++ object exported from main.cpp, but do not require it.
-    // On device the old page failed with:
-    //   ReferenceError: networkDiscovery is not defined
-    // so this page now has its own model as a safe fallback.
+    // Prefer the application-wide C++ discovery model. A local model keeps
+    // discovery available if the root-context object is unavailable.
     property var discoveryModel: fallbackNetworkDiscovery
     property bool usingFallbackModel: true
 
@@ -92,16 +90,6 @@ Page {
                 width: parent.width - 2 * Theme.horizontalPageMargin
                 text: qsTr("Searches the local IPv4 /24 network for devices with SMB port 445 open. This detects possible NAS servers, but it cannot discover share names yet.")
                 color: Theme.secondaryColor
-                wrapMode: Text.Wrap
-            }
-
-            Label {
-                visible: page.usingFallbackModel
-                x: Theme.horizontalPageMargin
-                width: parent.width - 2 * Theme.horizontalPageMargin
-                text: qsTr("Using the discovery page fallback model.")
-                color: Theme.secondaryColor
-                font.pixelSize: Theme.fontSizeTiny
                 wrapMode: Text.Wrap
             }
 
@@ -184,7 +172,6 @@ Page {
 
     Component.onCompleted: {
         bindDiscoveryModel()
-        console.log("SailVideo: NetworkDiscoveryPage usingFallbackModel=" + usingFallbackModel)
         if (discoveryModel.count === 0 && !discoveryModel.scanning) {
             discoveryModel.scan()
         }

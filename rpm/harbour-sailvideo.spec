@@ -64,6 +64,8 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 - Keep mixed-folder navigation moving past unsupported Cast videos
 - Dim playback/Cast controls while a pulley menu is open
 - Keep player controls visible for the full lifetime of an open pulley menu
+- Finalise release UI text and current Chromecast documentation
+- Remove obsolete Cast-page/back-up QML and generated libsmb2 build artifacts
 
 * Thu Sep 17 2026 edp17 <edp17@protonmail.com> - 1.1.0.4-1
 - Move Chromecast selection and controls onto the video/picture pages

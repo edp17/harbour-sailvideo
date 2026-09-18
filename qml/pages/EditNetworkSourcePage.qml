@@ -97,7 +97,7 @@ Page {
             Label {
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
-                text: qsTr("Enter a direct HTTP or HTTPS media URL, for example a video file served by a NAS web server. SMB share browsing will be implemented separately.")
+                text: qsTr("Enter a direct HTTP or HTTPS media URL, for example a video file served by a web server or NAS. SMB shares are configured separately under NAS sources.")
                 color: Theme.secondaryColor
                 wrapMode: Text.Wrap
             }

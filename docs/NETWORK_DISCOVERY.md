@@ -1,28 +1,26 @@
 # Network discovery
 
-SailVideo Phase 8 r1 includes a simple first-pass NAS discovery page.
+SailVideo includes a simple NAS discovery helper.
 
 The scanner:
 
-- enumerates active non-loopback IPv4 network interfaces;
-- scans the local `/24` address range for hosts with TCP port 445 open;
-- lists each reachable address as a possible SMB/NAS server;
-- opens the Add SMB source page with the host pre-filled when tapped.
+- enumerates active non-loopback IPv4 interfaces;
+- scans the local `/24` network for hosts with TCP port 445 open;
+- lists reachable addresses as possible SMB/NAS servers;
+- opens Add SMB source with the selected host pre-filled.
+
+Discovery does not enumerate SMB share names. The user still enters the share
+and optional folder path on the SMB source page.
 
 Limitations:
 
-- it does not discover SMB share names yet;
-- it does not use WS-Discovery, NetBIOS or mDNS yet;
-- firewalls or NAS security settings can hide otherwise valid servers;
-- large or unusual subnets are intentionally not scanned in this first version.
+- no WS-Discovery, NetBIOS or SMB share enumeration;
+- firewalls or NAS security settings may hide otherwise valid servers;
+- unusual or larger subnets are intentionally not scanned beyond the local
+  `/24` heuristic.
 
-If discovery finds nothing, manual NAS entry remains the authoritative path.
+Manual NAS entry remains available and is the authoritative fallback.
 
-
-## Phase 8 r3
-
-The discovery page no longer depends solely on a root-context property named
-`networkDiscovery`. The C++ `NetworkDiscoveryModel` is also registered as a QML
-type, and `NetworkDiscoveryPage.qml` creates a fallback instance when required.
-This fixes the device-side `ReferenceError: networkDiscovery is not defined`
-failure.
+`NetworkDiscoveryPage.qml` prefers the application-wide discovery model and can
+instantiate its own model if the root-context object is unavailable. This
+fallback is internal and is not exposed as a user-facing diagnostic.

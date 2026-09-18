@@ -13,3 +13,8 @@ Makefile
 documentation.list
 harbour-sailvideo
 install_manifest.txt
+*.orig
+third_party/libsmb2/config.h
+third_party/libsmb2/lib/libsmb2.so*
+third_party/libsmb2/lib/smb2_autogen/
+third_party/libsmb2/libsmb2-config-version.cmake

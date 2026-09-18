@@ -97,7 +97,7 @@ Page {
                            + "• SMB2/SMB3 NAS browsing and seekable playback\n"
                            + "• Saved NAS sources with passwords protected by Sailfish Secrets\n"
                            + "• HTTP/HTTPS video sources with persistent source list\n"
-                           + "• Native Google Chromecast discovery with remembered devices\n"
+                           + "• Native Google Chromecast discovery with remembered devices and in-player controls\n"
                            + "• Video and NAS picture display on Chromecast\n"
                            + "• Direct URL casting and LAN Range bridge for local/SMB media\n"
                            + "• Remote play/pause, seek, skip, stop/continue, volume and disconnect controls\n"
@@ -106,7 +106,7 @@ Page {
                            + "• Swipe controls for playback volume and video brightness\n"
                            + "• Configurable new-video volume, brightness and skip interval\n"
                            + "• Keep-display-on support during playback\n"
-                           + "• NAS picture browsing with previous/next navigation and slideshow\n"
+                           + "• NAS picture browsing with previous/next navigation and configurable slideshow\n"
                            + "• Cover play/pause controls")
                 color: Theme.secondaryColor
                 wrapMode: Text.Wrap

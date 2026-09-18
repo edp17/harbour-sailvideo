@@ -1,8 +1,25 @@
 # Chromecast support
 
-SailVideo 1.1 adds a native Google Cast sender.
+SailVideo 1.1 includes a native Google Cast sender integrated directly into the
+video player and picture viewer.
 
-## Protocol architecture
+## User workflow
+
+For a video or picture:
+
+1. Open the media in SailVideo.
+2. Pull down the Player or Picture Viewer menu.
+3. Tap a remembered Chromecast, or choose **Scan for Chromecast**.
+4. Continue controlling the media from the same page.
+
+There is no separate Chromecast control page in the normal workflow.
+
+While casting, a compact overlay identifies the receiver and exposes
+Cast-specific controls. Normal video/picture navigation remains on the standard
+media controls. Settings also remains available from the media-page pulley
+menu.
+
+## Discovery
 
 Discovery uses multicast DNS for:
 
@@ -10,15 +27,19 @@ Discovery uses multicast DNS for:
 _googlecast._tcp.local
 ```
 
-The implementation intentionally uses the classic Qt 5 `QUdpSocket`
-`readDatagram()` API for Sailfish OS 5 compatibility.
+The implementation uses Qt 5 `QUdpSocket` APIs compatible with Sailfish OS 5.
 
-The Cast V2 control channel uses TLS to the receiver on port 8009. SailVideo
-implements the small Cast V2 protobuf message envelope directly and exchanges
-JSON payloads in the standard Cast namespaces. There is no external protobuf
-runtime dependency.
+Discovered devices are cached in SailVideo's application-data directory. A
+remembered device can therefore appear without starting a new scan. An explicit
+**Scan for Chromecast** action refreshes known receivers and discovers new ones.
 
-SailVideo launches Google's Default Media Receiver:
+## Cast V2 control channel
+
+SailVideo connects to the receiver over TLS on port 8009 and implements the
+small Cast V2 protobuf envelope directly. No external protobuf runtime is
+required.
+
+The sender launches Google's Default Media Receiver:
 
 ```text
 CC1AD845
@@ -26,117 +47,93 @@ CC1AD845
 
 ## Media URLs
 
-HTTP/HTTPS video:
-- the original source URL is sent directly to Chromecast.
+### HTTP/HTTPS video
 
-Local video:
-- SailVideo registers the local file with its existing HTTP Range server;
-- a second LAN listener exposes that token using the phone's LAN address.
+The original source URL is sent directly to Chromecast.
 
-SMB/NAS video:
-- the existing libsmb2/Range bridge is reused;
-- SailVideo does not create another SMB implementation for Cast.
+### Local video
+
+SailVideo exposes the local file through a temporary LAN listener backed by the
+existing HTTP Range server.
+
+### SMB/NAS video and pictures
+
+The same libsmb2/HTTP Range bridge used by SailVideo playback is reused for
+Chromecast. There is no second SMB implementation.
 
 The LAN listener:
+
 - binds an ephemeral IPv4 port;
-- selects the phone address on the same subnet as the Chromecast where possible;
-- only accepts the selected Chromecast peer address;
-- supports GET, HEAD and byte ranges through the existing stream implementation.
+- chooses a phone address reachable from the selected Chromecast;
+- accepts requests only from the selected receiver address;
+- supports GET, HEAD and byte ranges.
 
-## Remembered devices and reconnect
+## Video handoff
 
-Discovered Chromecast devices are cached in SailVideo's application-data
-directory. Opening the Cast page uses the remembered list immediately and
-does not start a fresh mDNS scan when devices are already known. The pulley
-menu provides an explicit scan/refresh action; a fresh discovery updates the
-stored address for the same receiver UUID.
+Video casting begins near SailVideo's current playback position.
 
-If a remembered receiver is unavailable, the TLS connection error is shown on
-the Cast page with a Retry action. The user can also start a scan to refresh a
-stale address or discover another receiver.
+Before LOAD, SailVideo applies the current playback-volume percentage to the
+receiver, clears the receiver's separate mute flag and waits for receiver status
+to confirm the requested audio state.
 
-When SailVideo detaches from an active receiver, the last Cast endpoint is
-recorded. On the next normal application launch SailVideo attempts to rejoin
-the already-running Default Media Receiver and opens the Chromecast page. It
-queries receiver/media status rather than launching or loading media again.
-This is most reliable for direct HTTP/HTTPS media because the receiver can keep
-fetching that source after SailVideo exits. Local/SMB media depends on the
-phone's LAN bridge and therefore cannot be guaranteed to survive process exit.
+While remote video is active, SailVideo's player controls operate on the Cast
+session for play/pause, seek, restart, skip and previous/next.
 
 ## Stop and continue
 
-`Stop media` stops the current media item but intentionally leaves the Default
-Media Receiver session connected. The button then becomes `Start / continue`;
-using it sends a fresh LOAD for the same remembered media at approximately the
-last remote position (or from the beginning after a completed item). This
-avoids a full disconnect/reconnect cycle.
+Stopping a video leaves the Default Media Receiver connected. SailVideo records
+the last remote position, and **Continue** reloads the same media at that
+position rather than requiring a disconnect/recast cycle.
 
-## Picture display
+## Pictures and slideshow
 
-SMB/NAS pictures opened by SailVideo can be displayed on Chromecast through
-the same LAN HTTP bridge. Images are loaded into the Default Media Receiver as
-image media. Previous/next picture navigation and SailVideo's slideshow issue
-a new LOAD for each picture, so no Cast-side image queue is required.
+SMB/NAS pictures are loaded into the Default Media Receiver as image media.
 
-## Disconnect semantics
+Previous/next picture navigation sends a new LOAD for the selected picture.
+Picture slideshow uses SailVideo's picture queue and the slideshow interval from
+Settings. In mixed folders, slideshow remains picture-only.
 
-`Disconnect and resume on phone` sends receiver namespace `STOP` with the
-active Cast receiver `sessionId`, waits for receiver status to confirm that the
-application session has terminated, then closes the TLS sender connection.
-The local player then seeks to the last remote position and resumes.
+Manual Previous/Next during Cast can use SailVideo's unified folder-media queue,
+allowing picture-to-video and video-to-picture transitions without returning to
+the NAS browser.
 
-`Leave playing on TV` only detaches the sender. Direct HTTP/HTTPS media can
-continue after SailVideo closes. Local/SMB media can continue only while the
-SailVideo process remains alive to serve its LAN URL.
+## Unsupported MOV files
 
-## Diagnostic prefixes
+SailVideo does not transcode QuickTime/MOV for Chromecast.
 
-Useful terminal logging is prefixed with:
+MOV is rejected before a receiver LOAD. The phone shows an explicit unsupported
+video placeholder while the receiver keeps the previous valid media. In a mixed
+folder the logical queue position still advances, so Previous/Next can continue
+past the unsupported item.
+
+## Disconnect and detach
+
+**Disconnect** terminates the Cast receiver session and, for video, resumes
+phone playback near the latest remote position.
+
+**Leave playing on TV** detaches the sender without stopping receiver media.
+Direct HTTP/HTTPS media can continue independently. Local/SMB media still
+depends on SailVideo remaining alive to serve the LAN URL.
+
+## Rejoin after restart
+
+When SailVideo has recorded a detached Cast endpoint, a later application launch
+attempts to rejoin the running Default Media Receiver in place. The Main-page
+**Now casting** card returns to the active Player or Picture Viewer workflow.
+
+Rejoin is most reliable for direct HTTP/HTTPS media. Local/SMB Cast media
+depends on SailVideo's LAN bridge and therefore cannot be guaranteed to survive
+process exit.
+
+## Diagnostics
+
+Useful terminal prefixes are:
 
 ```text
 SailVideo Cast:
 SailVideo Cast bridge:
+SailVideo SMB bridge:
 ```
 
-These cover discovery, TLS, receiver status, LOAD/media status, receiver STOP,
-LAN listener creation and HTTP Range requests.
-
-
-## 1.1.0.1 workflow rules
-
-### Initial receiver volume
-
-For video transfers, SailVideo sends the current local playback-volume
-percentage to the receiver immediately after the TLS Cast channel is ready and
-before the media LOAD. Picture transfers do not alter receiver volume.
-
-### Stop and continue position
-
-Before issuing media `STOP`, SailVideo stores the last reported remote
-position. Some receivers report `currentTime=0` while the STOP is being
-processed; that transient value is ignored for resume purposes. `Start /
-continue` sends a new LOAD using the captured stopped position.
-
-### Folder media navigation
-
-SailVideo keeps three related queues for an SMB folder:
-
-- video queue: videos only;
-- picture queue: pictures only;
-- folder media queue: pictures and videos in the current displayed folder
-  order.
-
-Ordinary video playback and ordinary picture viewing continue to use their
-specialised queues. During Cast playback, manual Previous/Next uses the unified
-folder-media queue when available. This means a mixed folder can move from a
-picture to a video, or vice versa, without returning to the NAS browser.
-
-Picture slideshow intentionally uses only the picture queue. In a mixed folder
-it skips videos and cycles through the images.
-
-### Returning to an active Cast workflow
-
-When a Cast session remains active and the user navigates back to the SailVideo
-main page, the `Now casting` card returns to the active player or picture
-viewer. The Chromecast page also provides an explicit `Return to player` or
-`Return to picture` action.
+These cover discovery, TLS, receiver/media status, LOAD, session stop and LAN
+HTTP Range activity.

@@ -378,25 +378,6 @@ Page {
                 }
             }
 
-            Button {
-                visible: appWindow.isCurrentLocalFile()
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: appWindow.currentUsesStreamBridge
-                      ? qsTr("Replay directly")
-                      : qsTr("Replay through HTTP bridge")
-                onClicked: {
-                    if (appWindow.currentUsesStreamBridge) {
-                        appWindow.openMedia(appWindow.currentMediaUrl,
-                                            appWindow.currentMediaTitle,
-                                            appWindow.lastKnownPosition)
-                    } else {
-                        appWindow.openLocalFileThroughBridge(appWindow.currentMediaUrl,
-                                                             appWindow.currentMediaTitle,
-                                                             appWindow.lastKnownPosition)
-                    }
-                }
-            }
-
             SectionHeader {
                 visible: appSettings.hasLastNasSource
                 text: qsTr("Last browsed NAS")

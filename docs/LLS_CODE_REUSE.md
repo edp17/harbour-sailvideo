@@ -8,7 +8,7 @@ remain in the affected source file.
 
 | SailVideo file | LLs source file | Upstream revision | Reused portion | SailVideo modifications |
 |---|---|---|---|---|
-| _None through SailVideo 1.0_ | — | — | — | — |
+| _None through SailVideo 1.1.0.5_ | — | — | — | — |
 
 ## Rules
 

@@ -41,7 +41,7 @@ Page {
             }
 
             MenuItem {
-                text: qsTr("System picker (fallback)")
+                text: qsTr("System video picker")
                 onClicked: pageStack.push(videoPickerComponent)
             }
         }
@@ -173,7 +173,7 @@ Page {
         id: videoPickerComponent
 
         VideoPickerPage {
-            title: qsTr("System picker")
+            title: qsTr("System video picker")
 
             onSelectedContentPropertiesChanged: {
                 var mediaUrl = appWindow.mediaUrlFromPickerProperties(selectedContentProperties)

@@ -106,6 +106,7 @@ ApplicationWindow {
     property var currentPictureSmbSize: 0
     property real videoDimming: 0.0
     property int playbackVolumePercent: 30
+    property int localVolumeReapplyAttempts: 0
     property string pendingNetworkSourceUrl: ""
     property string pendingNetworkTitle: ""
     property int pendingNetworkResumePosition: 0
@@ -253,6 +254,32 @@ ApplicationWindow {
         return playbackVolumePercent
     }
 
+    function applyLocalPlaybackVolume() {
+        if (videoCastActive) {
+            return
+        }
+
+        var bounded = Math.max(0, Math.min(100, Math.round(playbackVolumePercent)))
+        var mute = bounded <= 0
+
+        // Application/player level only. Never write @DEFAULT_SINK@ here: the
+        // Sailfish system media volume must remain the master level and must be
+        // able to keep SailVideo silent at system volume 0%.
+        mediaPlayer.muted = mute
+        mediaPlayer.volume = mute ? 0.0 : bounded / 100.0
+    }
+
+    function scheduleLocalVolumeReapply() {
+        if (videoCastActive) {
+            localVolumeReapplyTimer.stop()
+            return
+        }
+
+        localVolumeReapplyAttempts = 0
+        applyLocalPlaybackVolume()
+        localVolumeReapplyTimer.restart()
+    }
+
     function setVolumePercent(value) {
         var bounded = Math.max(0, Math.min(100, Math.round(value)))
 
@@ -266,24 +293,8 @@ ApplicationWindow {
             return
         }
 
-        var mute = bounded <= 0
         playbackVolumePercent = bounded
-
-        // Keep QMediaPlayer updated for platforms where Qt volume is honoured.
-        mediaPlayer.muted = mute
-        mediaPlayer.volume = mute ? 0.0 : bounded / 100.0
-
-        // On Sailfish hardware-decoded playback, QMediaPlayer volume/mute can
-        // be ignored by the underlying GStreamer/droidmedia path. Use the
-        // PulseAudio default sink as the effective media-volume path when pactl
-        // is available. The C++ call is detached, so gesture handling is not
-        // blocked by a shell command.
-        if (typeof systemAudioController !== "undefined"
-                && systemAudioController
-                && systemAudioController.available) {
-            systemAudioController.setVolumePercent(bounded)
-        }
-
+        applyLocalPlaybackVolume()
         showAdjustmentStatus(qsTr("Media volume: %1%").arg(bounded))
     }
 
@@ -2325,6 +2336,14 @@ ApplicationWindow {
 
         onPlaybackStateChanged: {
             appWindow.updatePlaybackStatus()
+
+            if (playbackState === MediaPlayer.PlayingState
+                    && !appWindow.videoCastActive) {
+                appWindow.scheduleLocalVolumeReapply()
+            } else if (playbackState !== MediaPlayer.PlayingState) {
+                localVolumeReapplyTimer.stop()
+            }
+
             if (!appWindow.playerSuspended
                     && playbackState !== MediaPlayer.PlayingState
                     && status !== MediaPlayer.NoMedia
@@ -2384,6 +2403,25 @@ ApplicationWindow {
         interval: 1200
         repeat: false
         onTriggered: appWindow.adjustmentStatus = ""
+    }
+
+    Timer {
+        id: localVolumeReapplyTimer
+        interval: 200
+        repeat: true
+        onTriggered: {
+            if (appWindow.videoCastActive
+                    || mediaPlayer.playbackState !== MediaPlayer.PlayingState) {
+                stop()
+                return
+            }
+
+            appWindow.applyLocalPlaybackVolume()
+            appWindow.localVolumeReapplyAttempts += 1
+            if (appWindow.localVolumeReapplyAttempts >= 5) {
+                stop()
+            }
+        }
     }
 
     Timer {

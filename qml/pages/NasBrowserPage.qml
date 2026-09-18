@@ -30,6 +30,9 @@ Page {
     property string username: ""
     property bool guest: true
     property string currentPath: ""
+    property string sourceRootPath: ""
+    property var folderScrollPositions: ({})
+    property real pendingRestoreContentY: 0
     property string requestId: ""
     property string sessionPassword: ""
     property bool rememberPassword: true
@@ -50,6 +53,17 @@ Page {
 
     ListModel {
         id: entryModel
+    }
+
+    Timer {
+        id: scrollRestoreTimer
+        interval: 50
+        repeat: false
+        onTriggered: {
+            var maxY = Math.max(0, browserFlickable.contentHeight - browserFlickable.height)
+            browserFlickable.contentY = Math.max(
+                        0, Math.min(page.pendingRestoreContentY, maxY))
+        }
     }
 
     Timer {
@@ -112,6 +126,40 @@ Page {
         var cleanPath = clean(path)
         return "//" + host + "/" + share
                 + (smbBackend.displayPath(cleanPath) === "/" ? "" : smbBackend.displayPath(cleanPath))
+    }
+
+    function relativeBrowsePath() {
+        var path = clean(currentPath)
+        var root = clean(sourceRootPath)
+
+        if (path.length === 0 || path === root) {
+            return ""
+        }
+
+        if (root.length > 0 && path.indexOf(root + "/") === 0) {
+            return path.substring(root.length + 1)
+        }
+
+        return path
+    }
+
+    function breadcrumbText() {
+        var relativePath = relativeBrowsePath()
+        return relativePath.length > 0 ? ".." + relativePath : ""
+    }
+
+    function rememberScrollPosition(path) {
+        var key = clean(path)
+        folderScrollPositions[key] = Math.max(0, browserFlickable.contentY)
+    }
+
+    function restoreScrollPosition(path) {
+        var key = clean(path)
+        var saved = folderScrollPositions[key]
+        pendingRestoreContentY = saved !== undefined && saved !== null
+                ? Math.max(0, Number(saved))
+                : 0
+        scrollRestoreTimer.restart()
     }
 
     function sourceNameForFolder(folderPath) {
@@ -211,7 +259,11 @@ Page {
         }
 
         clearPendingMediaAction()
-        currentPath = clean(path)
+
+        var nextPath = clean(path)
+        rememberScrollPosition(currentPath)
+        currentPath = nextPath
+
         requestId = String(Date.now()) + "-" + Math.floor(Math.random() * 100000)
         errorLabel.text = ""
         statusLabel.text = qsTr("Opening %1").arg(smbBackend.displayPath(currentPath))
@@ -589,6 +641,7 @@ Page {
 
             selectedEntries = sortEntries(selectedEntries)
             rebuildList(selectedEntries)
+            restoreScrollPosition(currentPath)
 
             page.lastReturnedCount = totalCount
             page.lastVisibleCount = baseEntries.length
@@ -673,6 +726,7 @@ Page {
     }
 
     SilicaFlickable {
+        id: browserFlickable
         anchors.fill: parent
         contentHeight: contentColumn.height + Theme.paddingLarge
 
@@ -691,6 +745,17 @@ Page {
 
             PageHeader {
                 title: sourceTitle && sourceTitle.length > 0 ? sourceTitle : qsTr("SMB share")
+            }
+
+            Label {
+                visible: page.breadcrumbText().length > 0
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * Theme.horizontalPageMargin
+                text: page.breadcrumbText()
+                color: Theme.secondaryColor
+                font.pixelSize: Theme.fontSizeExtraSmall
+                horizontalAlignment: Text.AlignHCenter
+                truncationMode: TruncationMode.Fade
             }
 
             Row {
@@ -1010,6 +1075,8 @@ Page {
     }
 
     Component.onCompleted: {
+        sourceRootPath = clean(currentPath)
+
         if (guest) {
             browse(currentPath)
         } else {

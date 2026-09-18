@@ -2,7 +2,7 @@
 
 SailVideo is a native Sailfish OS media player for local, web and home-network media.
 
-**Current package version:** 1.1.0.5  
+**Current package version:** 1.1.0.6  
 **Release line:** SailVideo 1.1
 
 ## Features
@@ -141,3 +141,14 @@ SailVideo 1.1.0.5. See:
 - `LICENSES/BSD-3-Clause-LLs.txt`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/LLS_CODE_REUSE.md`
+
+## SailVideo 1.1.0.6 — media volume and NAS navigation
+
+- Playback now uses Sailfish's normal `x-maemo` media-volume role and no longer
+  changes the PulseAudio default-sink volume from SailVideo's app control.
+- The app-level QtMultimedia volume is reapplied after playback enters
+  PlayingState, keeping it separate from the system media-volume master.
+- NAS subfolders show a relative path below the source title, for example
+  `..edp17/sailvideo`.
+- The NAS browser remembers each visited folder's scroll position and restores
+  it when returning to that folder.

@@ -14,6 +14,7 @@
  * General Public License for more details.
  */
 
+#include <QByteArray>
 #include <QDebug>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -68,6 +69,12 @@ QUrl commandLineMediaUrl(const QStringList &arguments)
 int main(int argc, char *argv[])
 {
     QScopedPointer<QGuiApplication> app(SailfishApp::application(argc, argv));
+
+    // Route QtMultimedia through Sailfish's normal media-volume policy.
+    // Keep this after application() for Sailjail/icon-launch compatibility,
+    // but before createView()/QML creates MediaPlayer.
+    qputenv("PULSE_PROP_media.role", QByteArray("x-maemo"));
+
     qmlRegisterType<NetworkDiscoveryModel>("SailVideo", 1, 0, "NetworkDiscoveryModel");
     qmlRegisterType<LocalVideoFolderModel>("SailVideo", 1, 0, "LocalVideoFolderModel");
 

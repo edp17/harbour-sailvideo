@@ -148,7 +148,7 @@ Page {
             ValueButton {
                 label: qsTr("New video volume")
                 value: percentLabel(defaultVolumePercent(), 30, 0)
-                description: qsTr("Applied whenever a new video starts. Tap to cycle by 10%.")
+                description: qsTr("SailVideo playback level relative to the system media volume. Applied when a new video starts. Tap to cycle by 10%.")
                 onClicked: setDefaultVolumePercent(nextPercent(defaultVolumePercent(), 0))
             }
 

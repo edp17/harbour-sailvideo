@@ -1,6 +1,6 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
-Version:    1.1.0.8
+Version:    1.1.0.9
 Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
@@ -57,6 +57,20 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Fri Sep 18 2026 edp17 <edp17@pm.me> - 1.1.0.9-1
+- Release SailVideo 1.1 with native Google Chromecast support
+- Integrate Cast discovery/device selection and controls into Player and Picture Viewer
+- Cast HTTP/HTTPS directly and expose local/SMB media through the LAN HTTP Range bridge
+- Add Cast transport, seek, skip, previous/next, volume/mute, stop/continue and disconnect
+- Add Chromecast picture display, slideshow and mixed picture/video folder navigation
+- Respect Sailfish system media volume and preserve receiver volume/mute state correctly
+- Reject unsupported MOV Cast playback cleanly instead of starting broken receiver playback
+- Improve cold SMB playback, transient folder retries and HTTP Range seek stability
+- Add NAS breadcrumbs, scroll restoration and hard saved-source browsing roots
+- Polish portrait Cast controls and pulley-menu interaction
+- Remove obsolete Cast page, tracked QML backups and generated libsmb2 build artifacts
+- Finalise SailVideo 1.1 release documentation and legal/reuse metadata
+
 * Fri Sep 18 2026 edp17 <edp17@pm.me> - 1.1.0.8-1
 - Treat each saved NAS folder as a hard browsing root
 - Hide the Parent folder entry at the saved NAS source root

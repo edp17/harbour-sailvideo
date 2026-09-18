@@ -2,7 +2,7 @@
 
 SailVideo is a native Sailfish OS media player for local, web and home-network media.
 
-**Current package version:** 1.1.0.8  
+**Current package version:** 1.1.0.9  
 **Release line:** SailVideo 1.1
 
 ## Features
@@ -136,7 +136,7 @@ Bundled libsmb2 is licensed under LGPL-2.1-or-later. See:
 
 The repository also retains BSD 3-Clause licence material and a reuse ledger for
 LLs Video Player. No LLs Video Player source code has been incorporated through
-SailVideo 1.1.0.5. See:
+SailVideo 1.1.0.9. See:
 
 - `LICENSES/BSD-3-Clause-LLs.txt`
 - `THIRD_PARTY_NOTICES.md`
@@ -152,3 +152,23 @@ SailVideo 1.1.0.5. See:
   `..edp17/sailvideo`.
 - The NAS browser remembers each visited folder's scroll position and restores
   it when returning to that folder.
+
+## SailVideo 1.1.0.9 — SailVideo 1.1 release
+
+SailVideo 1.1 adds native Google Chromecast support while keeping the normal
+Player and Picture Viewer as the primary controls. Remembered receivers can be
+selected from the media-page pulley menu; HTTP/HTTPS media is sent directly,
+while local and SMB/NAS media is exposed through SailVideo's LAN HTTP Range
+bridge.
+
+The Cast workflow supports video play/pause, seeking, restart, skip,
+previous/next, receiver volume and mute, Stop/Continue and disconnect. NAS
+pictures can be displayed on Chromecast with previous/next and configurable
+slideshows, and mixed picture/video folders can move naturally between media
+types.
+
+The release also improves Sailfish media-volume integration, cold NAS playback,
+SMB directory retries, Range-seek robustness, NAS breadcrumbs and scroll
+restoration, saved NAS source boundaries, portrait Cast controls and pulley-menu
+behaviour. Unsupported MOV files are rejected before Chromecast LOAD instead of
+starting broken receiver playback.

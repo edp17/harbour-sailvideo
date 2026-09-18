@@ -57,7 +57,7 @@ Page {
             Label {
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
-                text: qsTr("SailVideo 1.1.0.5 contains no source code copied, adapted or rewritten from LLs Video Player. Permission and BSD 3-Clause licence material are retained in the source tree for possible future reuse. Any future reuse will retain the original copyright notice and be recorded in the project's code-reuse ledger.")
+                text: qsTr("SailVideo 1.1.0.9 contains no source code copied, adapted or rewritten from LLs Video Player. Permission and BSD 3-Clause licence material are retained in the source tree for possible future reuse. Any future reuse will retain the original copyright notice and be recorded in the project's code-reuse ledger.")
                 color: Theme.secondaryColor
                 wrapMode: Text.Wrap
             }

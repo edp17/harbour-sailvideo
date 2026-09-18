@@ -1,7 +1,7 @@
 # SailVideo 1.1 release testing checklist
 
 This is the minimum device checklist before publishing SailVideo 1.1
-(package version 1.1.0.8).
+(package version 1.1.0.9).
 
 ## Startup and Sailjail
 

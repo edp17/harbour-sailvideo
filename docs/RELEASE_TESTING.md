@@ -1,7 +1,7 @@
 # SailVideo 1.1 release testing checklist
 
 This is the minimum device checklist before publishing SailVideo 1.1
-(package version 1.1.0.7).
+(package version 1.1.0.8).
 
 ## Startup and Sailjail
 
@@ -145,3 +145,16 @@ Use a known-good H.264/AAC MP4.
   retry once automatically and only show an error if the retry also fails.
 - Seek repeatedly in a large SMB video, including near the beginning, middle
   and end. Confirm playback resumes and the app remains stable.
+
+## 1.1.0.8 saved NAS-root navigation
+
+- Open a NAS source saved to a subfolder rather than the SMB share root.
+- At that saved source root, confirm no Parent folder (`..`) row is shown.
+- Enter one or more subfolders and confirm Parent returns toward the saved root.
+- Confirm Parent disappears again at the saved root and cannot escape above it.
+- For a long nested relative path, confirm the deepest/right-most folder names
+  remain visible and the beginning is left-elided.
+- Open the same location through Main -> Last browsed NAS and confirm the same
+  saved-root boundary is retained.
+- With multiple saved source folders on one SMB share, confirm each source keeps
+  its own independent root boundary.

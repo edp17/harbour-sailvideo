@@ -2,7 +2,7 @@
 
 SailVideo is a native Sailfish OS media player for local, web and home-network media.
 
-**Current package version:** 1.1.0.7  
+**Current package version:** 1.1.0.8  
 **Release line:** SailVideo 1.1
 
 ## Features

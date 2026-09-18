@@ -31,6 +31,7 @@ Page {
     property bool guest: true
     property string currentPath: ""
     property string sourceRootPath: ""
+    property bool sourceRootLocked: false
     property var folderScrollPositions: ({})
     property real pendingRestoreContentY: 0
     property string requestId: ""
@@ -128,19 +129,43 @@ Page {
                 + (smbBackend.displayPath(cleanPath) === "/" ? "" : smbBackend.displayPath(cleanPath))
     }
 
+    function atSourceRoot() {
+        return clean(currentPath) === clean(sourceRootPath)
+    }
+
+    function pathInsideSourceRoot(path) {
+        var candidate = clean(path)
+        var root = clean(sourceRootPath)
+
+        if (root.length === 0) {
+            return true
+        }
+
+        return candidate === root || candidate.indexOf(root + "/") === 0
+    }
+
+    function boundedBrowsePath(path) {
+        var candidate = clean(path)
+        return pathInsideSourceRoot(candidate) ? candidate : clean(sourceRootPath)
+    }
+
     function relativeBrowsePath() {
         var path = clean(currentPath)
         var root = clean(sourceRootPath)
 
-        if (path.length === 0 || path === root) {
+        if (path === root) {
             return ""
         }
 
-        if (root.length > 0 && path.indexOf(root + "/") === 0) {
+        if (root.length === 0) {
+            return path
+        }
+
+        if (path.indexOf(root + "/") === 0) {
             return path.substring(root.length + 1)
         }
 
-        return path
+        return ""
     }
 
     function breadcrumbText() {
@@ -259,7 +284,7 @@ Page {
 
         clearPendingMediaAction()
 
-        var nextPath = clean(path)
+        var nextPath = boundedBrowsePath(path)
         rememberScrollPosition(currentPath)
         currentPath = nextPath
 
@@ -277,7 +302,7 @@ Page {
     }
 
     function browseParent() {
-        if (currentPath.length > 0) {
+        if (!atSourceRoot() && currentPath.length > 0) {
             browse(pathParent(currentPath))
         }
     }
@@ -494,7 +519,7 @@ Page {
     }
 
     function appendParentEntryIfNeeded() {
-        if (currentPath.length === 0) {
+        if (currentPath.length === 0 || atSourceRoot()) {
             return
         }
 
@@ -742,12 +767,27 @@ Page {
             spacing: Theme.paddingMedium
 
             PageHeader {
+                id: nasPageHeader
                 title: sourceTitle && sourceTitle.length > 0 ? sourceTitle : qsTr("SMB share")
-                // Reserve the description line at the source root so the
-                // header height never changes while entering/leaving folders.
-                description: page.breadcrumbText().length > 0
-                             ? page.breadcrumbText()
-                             : " "
+                description: " "
+
+                Label {
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        bottom: parent.bottom
+                        leftMargin: nasPageHeader.leftMargin
+                        rightMargin: nasPageHeader.rightMargin
+                        bottomMargin: Theme.paddingSmall
+                    }
+                    visible: page.breadcrumbText().length > 0
+                    text: page.breadcrumbText()
+                    color: Theme.secondaryColor
+                    font.pixelSize: Theme.fontSizeExtraSmall
+                    horizontalAlignment: Text.AlignRight
+                    wrapMode: Text.NoWrap
+                    elide: Text.ElideLeft
+                }
 
                 extraContent.children: [
                     BusyIndicator {
@@ -1073,7 +1113,10 @@ Page {
     }
 
     Component.onCompleted: {
-        sourceRootPath = clean(currentPath)
+        sourceRootPath = sourceRootLocked
+                ? clean(sourceRootPath)
+                : clean(currentPath)
+        currentPath = boundedBrowsePath(currentPath)
 
         if (guest) {
             browse(currentPath)

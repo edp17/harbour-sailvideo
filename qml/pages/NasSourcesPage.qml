@@ -175,7 +175,9 @@ Page {
                                                 domain: domain,
                                                 username: username,
                                                 guest: guest,
-                                                currentPath: path })
+                                                currentPath: path,
+                                                sourceRootPath: path,
+                                                sourceRootLocked: true })
 
                     Rectangle {
                         anchors {

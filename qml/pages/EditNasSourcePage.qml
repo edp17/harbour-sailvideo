@@ -283,6 +283,8 @@ Page {
                                 username: usernameValue(),
                                 guest: guestSwitch.checked,
                                 currentPath: pathValue(),
+                                sourceRootPath: pathValue(),
+                                sourceRootLocked: true,
                                 sessionPassword: guestSwitch.checked ? "" : passwordField.text })
         } else {
             pageStack.pop()

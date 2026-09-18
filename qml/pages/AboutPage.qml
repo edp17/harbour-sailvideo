@@ -68,7 +68,7 @@ Page {
             Label {
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
-                text: qsTr("Version 1.1.0.7")
+                text: qsTr("Version 1.1.0.8")
                 color: Theme.secondaryColor
                 horizontalAlignment: Text.AlignHCenter
             }

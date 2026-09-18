@@ -1,6 +1,6 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
-Version:    1.1.0.7
+Version:    1.1.0.8
 Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
@@ -57,6 +57,13 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Fri Sep 18 2026 edp17 <edp17@pm.me> - 1.1.0.8-1
+- Treat each saved NAS folder as a hard browsing root
+- Hide the Parent folder entry at the saved NAS source root
+- Preserve deepest folder names by left-eliding long relative paths
+- Keep Last browsed and password-resume browsing inside the correct saved root
+- Resolve multiple saved folders on one SMB share by the longest matching path
+
 * Fri Sep 18 2026 edp17 <edp17@pm.me> - 1.1.0.7-1
 - Use the native PageHeader description for the current NAS subfolder path
 - Keep NAS folder layout stable while directory requests are in progress

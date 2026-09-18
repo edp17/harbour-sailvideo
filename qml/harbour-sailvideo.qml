@@ -1721,6 +1721,45 @@ ApplicationWindow {
         }
     }
 
+    function normalizedNasPathForMatch(value) {
+        var text = cleanedValue(value).replace(/\\/g, "/")
+        while (text.length > 0 && text.charAt(0) === "/") {
+            text = text.substring(1)
+        }
+        while (text.length > 0 && text.charAt(text.length - 1) === "/") {
+            text = text.substring(0, text.length - 1)
+        }
+        return text
+    }
+
+    function findNasSourceIndexForPath(host, port, share, path) {
+        var cleanHost = cleanedValue(host).toLowerCase()
+        var cleanPort = port > 0 ? port : 445
+        var cleanShare = cleanedValue(share).toLowerCase()
+        var cleanPath = normalizedNasPathForMatch(path)
+        var bestIndex = -1
+        var bestRootLength = -1
+
+        for (var i = 0; i < nasSources.count; ++i) {
+            if (cleanedValue(nasSources.hostAt(i)).toLowerCase() !== cleanHost
+                    || nasSources.portAt(i) !== cleanPort
+                    || cleanedValue(nasSources.shareAt(i)).toLowerCase() !== cleanShare) {
+                continue
+            }
+
+            var candidateRoot = normalizedNasPathForMatch(nasSources.pathAt(i))
+            var containsPath = candidateRoot.length === 0
+                    || cleanPath === candidateRoot
+                    || cleanPath.indexOf(candidateRoot + "/") === 0
+            if (containsPath && candidateRoot.length > bestRootLength) {
+                bestIndex = i
+                bestRootLength = candidateRoot.length
+            }
+        }
+
+        return bestIndex
+    }
+
     function openRememberedSmbFromUrl(mediaUrl, title, resumePosition, showBrowserWhenPasswordMissing) {
         var parsed = smbBackend.parseSmbUrl(mediaUrl)
         if (!parsed.valid) {
@@ -1729,7 +1768,8 @@ ApplicationWindow {
             return false
         }
 
-        var sourceIndex = nasSources.indexForLocation(parsed.host, parsed.port, parsed.share)
+        var sourceIndex = findNasSourceIndexForPath(
+                    parsed.host, parsed.port, parsed.share, parsed.path)
         var sourceTitle = sourceIndex >= 0 ? nasSources.nameAt(sourceIndex) : parsed.host + "/" + parsed.share
         var sourceDomain = sourceIndex >= 0 ? nasSources.domainAt(sourceIndex) : ""
         var sourceUsername = sourceIndex >= 0 ? nasSources.usernameAt(sourceIndex) : ""
@@ -1753,7 +1793,9 @@ ApplicationWindow {
                                  domain: sourceDomain,
                                  username: sourceUsername,
                                  guest: sourceGuest,
-                                 currentPath: "" })
+                                 currentPath: sourceIndex >= 0 ? nasSources.pathAt(sourceIndex) : "",
+                                 sourceRootPath: sourceIndex >= 0 ? nasSources.pathAt(sourceIndex) : "",
+                                 sourceRootLocked: true })
             }
             return false
         }

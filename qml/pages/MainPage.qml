@@ -39,6 +39,15 @@ Page {
     function openLastNasSource() {
         if (!appSettings.hasLastNasSource) return
 
+        var sourceIndex = appWindow.findNasSourceIndexForPath(
+                    appSettings.lastNasHost,
+                    appSettings.lastNasPort,
+                    appSettings.lastNasShare,
+                    appSettings.lastNasPath)
+        var sourceRoot = sourceIndex >= 0
+                ? nasSources.pathAt(sourceIndex)
+                : appSettings.lastNasPath
+
         pageStack.push(Qt.resolvedUrl("NasBrowserPage.qml"),
                        { sourceTitle: appSettings.lastNasSourceTitle,
                          host: appSettings.lastNasHost,
@@ -47,7 +56,9 @@ Page {
                          domain: appSettings.lastNasDomain,
                          username: appSettings.lastNasUsername,
                          guest: appSettings.lastNasGuest,
-                         currentPath: appSettings.lastNasPath })
+                         currentPath: appSettings.lastNasPath,
+                         sourceRootPath: sourceRoot,
+                         sourceRootLocked: true })
     }
 
     function lastNasTitle() {

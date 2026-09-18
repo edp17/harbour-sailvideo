@@ -467,6 +467,11 @@ void LocalFileStreamServer::pumpClientData(QTcpSocket *socket)
         return;
     }
 
+    if (socket->state() == QAbstractSocket::UnconnectedState) {
+        closeTransfer(socket);
+        return;
+    }
+
     Transfer *transfer = m_transfers.value(socket, nullptr);
     if (!transfer) {
         return;
@@ -489,6 +494,13 @@ void LocalFileStreamServer::pumpClientData(QTcpSocket *socket)
 
         if (data.isEmpty()) {
             break;
+        }
+
+        // A seek commonly abandons the previous HTTP Range connection.
+        // Free that stale transfer instead of feeding it after disconnect.
+        if (socket->state() == QAbstractSocket::UnconnectedState) {
+            closeTransfer(socket);
+            return;
         }
 
         const qint64 written = socket->write(data);

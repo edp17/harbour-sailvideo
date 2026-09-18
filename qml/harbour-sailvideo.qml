@@ -984,12 +984,24 @@ ApplicationWindow {
             return
         }
 
-        var duration = playbackDuration()
-        if (duration <= 0) {
+        var requestedTarget = Number(targetPosition)
+        if (isNaN(requestedTarget) || !isFinite(requestedTarget)) {
             return
         }
 
-        var safeTarget = Math.max(0, Math.min(duration, Math.round(targetPosition)))
+        var duration = playbackDuration()
+        if (duration <= 0 || isNaN(duration) || !isFinite(duration)) {
+            return
+        }
+
+        if (!videoCastActive
+                && (playerSuspended
+                    || mediaPlayer.status === MediaPlayer.NoMedia
+                    || mediaPlayer.status === MediaPlayer.InvalidMedia)) {
+            return
+        }
+
+        var safeTarget = Math.max(0, Math.min(duration, Math.round(requestedTarget)))
         if (duration > 5000) {
             safeTarget = Math.min(safeTarget, duration - 1000)
         }

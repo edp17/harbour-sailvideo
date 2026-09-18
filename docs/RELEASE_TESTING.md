@@ -1,7 +1,7 @@
 # SailVideo 1.1 release testing checklist
 
 This is the minimum device checklist before publishing SailVideo 1.1
-(package version 1.1.0.5).
+(package version 1.1.0.7).
 
 ## Startup and Sailjail
 
@@ -134,3 +134,14 @@ Use a known-good H.264/AAC MP4.
 - Confirm no `.qml.orig`, generated `libsmb2.so*`, `smb2_autogen`, generated
   `config.h` or generated CMake config files are present in the source package.
 - Confirm SMB passwords are not written to JSON configuration files.
+
+## 1.1.0.7 NAS/seek stability checks
+
+- Enter nested NAS folders and confirm the relative path is shown as the
+  PageHeader description, aligned with the title.
+- Enter and leave folders repeatedly; the file list must not jump vertically
+  while the request starts.
+- If the NAS produces a transient first connect/open failure, SailVideo should
+  retry once automatically and only show an error if the retry also fails.
+- Seek repeatedly in a large SMB video, including near the beginning, middle
+  and end. Confirm playback resumes and the app remains stable.

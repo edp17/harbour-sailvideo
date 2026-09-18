@@ -1,6 +1,6 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
-Version:    1.1.0.6
+Version:    1.1.0.7
 Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
@@ -57,6 +57,12 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Fri Sep 18 2026 edp17 <edp17@pm.me> - 1.1.0.7-1
+- Use the native PageHeader description for the current NAS subfolder path
+- Keep NAS folder layout stable while directory requests are in progress
+- Retry one failed fresh SMB folder connect/open before showing an error
+- Harden seek target validation and abandon stale HTTP Range transfers promptly
+
 * Fri Sep 18 2026 edp17 <edp17@pm.me> - 1.1.0.6-1
 - Route playback through Sailfish's x-maemo media-volume policy
 - Stop changing the global PulseAudio default-sink volume from the player

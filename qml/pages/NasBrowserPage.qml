@@ -253,7 +253,6 @@ Page {
         if (smbBackend.busy) {
             clearPendingMediaAction()
             pendingBrowsePath = clean(path)
-            statusLabel.text = qsTr("Waiting for the previous SMB request…")
             errorLabel.text = ""
             return
         }
@@ -266,7 +265,6 @@ Page {
 
         requestId = String(Date.now()) + "-" + Math.floor(Math.random() * 100000)
         errorLabel.text = ""
-        statusLabel.text = qsTr("Opening %1").arg(smbBackend.displayPath(currentPath))
         smbBackend.listDirectory(requestId,
                                  host,
                                  port,
@@ -745,17 +743,22 @@ Page {
 
             PageHeader {
                 title: sourceTitle && sourceTitle.length > 0 ? sourceTitle : qsTr("SMB share")
-            }
+                // Reserve the description line at the source root so the
+                // header height never changes while entering/leaving folders.
+                description: page.breadcrumbText().length > 0
+                             ? page.breadcrumbText()
+                             : " "
 
-            Label {
-                visible: page.breadcrumbText().length > 0
-                x: Theme.horizontalPageMargin
-                width: parent.width - 2 * Theme.horizontalPageMargin
-                text: page.breadcrumbText()
-                color: Theme.secondaryColor
-                font.pixelSize: Theme.fontSizeExtraSmall
-                horizontalAlignment: Text.AlignHCenter
-                truncationMode: TruncationMode.Fade
+                extraContent.children: [
+                    BusyIndicator {
+                        anchors {
+                            left: parent.left
+                            verticalCenter: parent.verticalCenter
+                        }
+                        running: smbBackend.busy
+                        size: BusyIndicatorSize.Medium
+                    }
+                ]
             }
 
             Row {
@@ -899,7 +902,8 @@ Page {
                 color: Theme.secondaryColor
                 font.pixelSize: Theme.fontSizeExtraSmall
                 horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.Wrap
+                wrapMode: Text.NoWrap
+                truncationMode: TruncationMode.Fade
             }
 
             Label {
@@ -931,12 +935,6 @@ Page {
                 }
             }
 
-            BusyIndicator {
-                anchors.horizontalCenter: parent.horizontalCenter
-                running: smbBackend.busy
-                visible: running
-                size: BusyIndicatorSize.Medium
-            }
 
             Repeater {
                 model: entryModel

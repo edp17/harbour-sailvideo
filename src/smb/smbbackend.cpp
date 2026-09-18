@@ -914,79 +914,102 @@ SmbBackend::ListResult SmbBackend::listDirectorySync(const ListRequest &request)
     ListResult result;
     result.requestId = request.requestId;
 
-    LibSmb2 api;
-    smb2_context *context = nullptr;
-    QString error;
-    if (!configureAndConnect(&api,
-                             &context,
-                             request.host,
-                             request.port,
-                             request.share,
-                             request.domain,
-                             request.username,
-                             request.password,
-                             request.guest,
-                             &error)) {
-        result.errorString = error;
-        return result;
-    }
+    // A sleeping/cold NAS can occasionally reject the first fresh
+    // connect/opendir and then work immediately. Retry once with a new SMB
+    // context. Persistent failures are still returned unchanged.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        LibSmb2 api;
+        smb2_context *context = nullptr;
+        QString error;
+        if (!configureAndConnect(&api,
+                                 &context,
+                                 request.host,
+                                 request.port,
+                                 request.share,
+                                 request.domain,
+                                 request.username,
+                                 request.password,
+                                 request.guest,
+                                 &error)) {
+            if (attempt == 0) {
+                QThread::msleep(650);
+                continue;
+            }
+            result.errorString = error;
+            return result;
+        }
 
-    const QByteArray pathBytes = normalizedPath(request.path).toUtf8();
-    smb2dir *dir = api.openDir(context, pathBytes.constData());
-    if (!dir) {
-        const QString cleanPath = normalizedPath(request.path);
-        result.errorString = QObject::tr("Could not open SMB folder %1: %2")
-                .arg(cleanPath.isEmpty() ? QStringLiteral("/") : QStringLiteral("/") + cleanPath)
-                .arg(api.error(context));
+        const QByteArray pathBytes = normalizedPath(request.path).toUtf8();
+        smb2dir *dir = api.openDir(context, pathBytes.constData());
+        if (!dir) {
+            const QString cleanPath = normalizedPath(request.path);
+            const QString openError = QObject::tr("Could not open SMB folder %1: %2")
+                    .arg(cleanPath.isEmpty()
+                         ? QStringLiteral("/")
+                         : QStringLiteral("/") + cleanPath)
+                    .arg(api.error(context));
+            api.disconnectShare(context);
+            api.destroyContext(context);
+
+            if (attempt == 0) {
+                QThread::msleep(650);
+                continue;
+            }
+
+            result.errorString = openError;
+            return result;
+        }
+
+        QList<QVariantMap> directories;
+        QList<QVariantMap> files;
+
+        for (;;) {
+            smb2dirent *entry = api.readDir(context, dir);
+            if (!entry) {
+                break;
+            }
+
+            const QString name = entry->name ? QString::fromUtf8(entry->name) : QString();
+            if (name.isEmpty()
+                    || name == QLatin1String(".")
+                    || name == QLatin1String("..")) {
+                continue;
+            }
+
+            const bool isDirectory = entry->st.smb2_type == Smb2TypeDirectory;
+            const qint64 size = static_cast<qint64>(entry->st.smb2_size);
+            QVariantMap item = makeEntry(name, joinPath(request.path, name),
+                                         isDirectory, size);
+            if (isDirectory) {
+                directories.append(item);
+            } else {
+                files.append(item);
+            }
+        }
+
+        api.closeDir(context, dir);
         api.disconnectShare(context);
         api.destroyContext(context);
+
+        const auto byName = [](const QVariantMap &a, const QVariantMap &b) {
+            return QString::localeAwareCompare(
+                        a.value(QStringLiteral("name")).toString(),
+                        b.value(QStringLiteral("name")).toString()) < 0;
+        };
+        std::sort(directories.begin(), directories.end(), byName);
+        std::sort(files.begin(), files.end(), byName);
+
+        for (int i = 0; i < directories.size(); ++i) {
+            result.entries.append(directories.at(i));
+        }
+        for (int i = 0; i < files.size(); ++i) {
+            result.entries.append(files.at(i));
+        }
+
         return result;
     }
 
-    QList<QVariantMap> directories;
-    QList<QVariantMap> files;
-
-    for (;;) {
-        smb2dirent *entry = api.readDir(context, dir);
-        if (!entry) {
-            break;
-        }
-
-        const QString name = entry->name ? QString::fromUtf8(entry->name) : QString();
-        if (name.isEmpty()
-                || name == QLatin1String(".")
-                || name == QLatin1String("..")) {
-            continue;
-        }
-
-        const bool isDirectory = entry->st.smb2_type == Smb2TypeDirectory;
-        const qint64 size = static_cast<qint64>(entry->st.smb2_size);
-        QVariantMap item = makeEntry(name, joinPath(request.path, name), isDirectory, size);
-        if (isDirectory) {
-            directories.append(item);
-        } else {
-            files.append(item);
-        }
-    }
-
-    api.closeDir(context, dir);
-    api.disconnectShare(context);
-    api.destroyContext(context);
-
-    const auto byName = [](const QVariantMap &a, const QVariantMap &b) {
-        return QString::localeAwareCompare(a.value(QStringLiteral("name")).toString(),
-                                           b.value(QStringLiteral("name")).toString()) < 0;
-    };
-    std::sort(directories.begin(), directories.end(), byName);
-    std::sort(files.begin(), files.end(), byName);
-
-    for (int i = 0; i < directories.size(); ++i) {
-        result.entries.append(directories.at(i));
-    }
-    for (int i = 0; i < files.size(); ++i) {
-        result.entries.append(files.at(i));
-    }
-
+    result.errorString = QObject::tr("Could not load the SMB folder.");
     return result;
 }
 

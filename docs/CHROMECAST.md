@@ -31,7 +31,8 @@ The implementation uses Qt 5 `QUdpSocket` APIs compatible with Sailfish OS 5.
 
 Discovered devices are cached in SailVideo's application-data directory. A
 remembered device can therefore appear without starting a new scan. An explicit
-**Scan for Chromecast** action refreshes known receivers and discovers new ones.
+**Scan for Chromecast** action refreshes known receivers and discovers new ones,
+including on a fresh installation with an empty receiver cache.
 
 ## Cast V2 control channel
 
@@ -44,6 +45,11 @@ The sender launches Google's Default Media Receiver:
 ```text
 CC1AD845
 ```
+
+If the receiver transiently closes the Cast V2 TLS control channel while media
+is still active, SailVideo retries the sender connection and rejoins the
+existing receiver session rather than issuing a new LOAD. This keeps compatible
+TV playback running and preserves the local/SMB LAN bridge during recovery.
 
 ## Media URLs
 

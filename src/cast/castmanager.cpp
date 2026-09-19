@@ -26,6 +26,7 @@ const char *DefaultMediaReceiver = "CC1AD845";
 
 const char *NsConnection = "urn:x-cast:com.google.cast.tp.connection";
 const char *NsHeartbeat = "urn:x-cast:com.google.cast.tp.heartbeat";
+const int MaxReconnectAttempts = 3;
 const char *NsReceiver = "urn:x-cast:com.google.cast.receiver";
 const char *NsMedia = "urn:x-cast:com.google.cast.media";
 
@@ -164,6 +165,11 @@ CastManager::CastManager(QObject *parent)
     m_disconnectTimer.setSingleShot(true);
     connect(&m_disconnectTimer, SIGNAL(timeout()),
             this, SLOT(handleDisconnectTimeout()));
+
+    m_reconnectTimer.setInterval(1000);
+    m_reconnectTimer.setSingleShot(true);
+    connect(&m_reconnectTimer, SIGNAL(timeout()),
+            this, SLOT(attemptReconnect()));
 }
 
 CastManager::~CastManager()
@@ -375,6 +381,9 @@ bool CastManager::replaceMediaWithVolume(const QString &mediaUrl,
 
 void CastManager::resetForNewRequest()
 {
+    m_reconnectTimer.stop();
+    m_reconnectScheduled = false;
+    m_reconnectAttempts = 0;
     m_intentionalClose = false;
     m_readBuffer.clear();
     m_sessionId.clear();
@@ -403,6 +412,9 @@ void CastManager::resetForNewRequest()
 
 void CastManager::clearSessionState(bool preservePosition)
 {
+    m_reconnectTimer.stop();
+    m_reconnectScheduled = false;
+    m_reconnectAttempts = 0;
     m_sessionId.clear();
     m_transportId.clear();
     m_mediaSessionId = 0;
@@ -457,6 +469,87 @@ void CastManager::handleSslErrors(const QList<QSslError> &errors)
     m_socket.ignoreSslErrors();
 }
 
+bool CastManager::canReconnect() const
+{
+    return !m_intentionalClose
+            && !m_disconnecting
+            && m_casting
+            && !m_host.isEmpty()
+            && m_reconnectAttempts < MaxReconnectAttempts;
+}
+
+void CastManager::scheduleReconnect(const QString &reason)
+{
+    if (!canReconnect()) {
+        failConnection(reason);
+        return;
+    }
+
+    if (m_reconnectScheduled || m_reconnectTimer.isActive()) {
+        return;
+    }
+
+    m_pollTimer.stop();
+    m_disconnectTimer.stop();
+    m_readBuffer.clear();
+    m_sessionId.clear();
+    m_transportId.clear();
+    m_mediaSessionId = 0;
+
+    // Preserve Cast mode and media state. For local/SMB Cast this also keeps
+    // the LAN HTTP bridge alive while only the control channel reconnects.
+    setConnected(false);
+    setRejoining(true);
+    setLastError(QString());
+    setStatusText(tr("Reconnecting to %1").arg(m_deviceName));
+
+    m_reconnectScheduled = true;
+    m_reconnectTimer.start();
+
+    qWarning() << "SailVideo Cast: control connection lost; scheduling reconnect"
+               << (m_reconnectAttempts + 1) << "of" << MaxReconnectAttempts
+               << reason;
+}
+
+void CastManager::attemptReconnect()
+{
+    if (!m_reconnectScheduled || m_intentionalClose || m_disconnecting
+            || !m_casting || m_host.isEmpty()) {
+        m_reconnectScheduled = false;
+        return;
+    }
+
+    if (m_socket.state() != QAbstractSocket::UnconnectedState) {
+        m_reconnectTimer.start(250);
+        return;
+    }
+
+    m_reconnectScheduled = false;
+    ++m_reconnectAttempts;
+
+    setStatusText(tr("Reconnecting to %1 (%2/%3)")
+                  .arg(m_deviceName)
+                  .arg(m_reconnectAttempts)
+                  .arg(MaxReconnectAttempts));
+
+    qInfo() << "SailVideo Cast: reconnecting TLS control channel to"
+            << m_deviceName << m_host << m_port
+            << "attempt" << m_reconnectAttempts;
+
+    m_socket.connectToHostEncrypted(m_host, quint16(m_port));
+}
+
+void CastManager::failConnection(const QString &message)
+{
+    const QString text = message.isEmpty()
+            ? tr("Chromecast connection failed.")
+            : message;
+    qWarning() << "SailVideo Cast:" << text;
+    setLastError(text);
+    setStatusText(text);
+    clearSessionState(true);
+}
+
 void CastManager::handleSocketError(QAbstractSocket::SocketError error)
 {
     Q_UNUSED(error)
@@ -467,10 +560,13 @@ void CastManager::handleSocketError(QAbstractSocket::SocketError error)
     const QString message = m_socket.errorString().isEmpty()
             ? tr("Chromecast connection failed.")
             : tr("Chromecast connection failed: %1").arg(m_socket.errorString());
-    qWarning() << "SailVideo Cast:" << message;
-    setLastError(message);
-    setStatusText(message);
-    clearSessionState(true);
+
+    if (canReconnect()) {
+        scheduleReconnect(message);
+        return;
+    }
+
+    failConnection(message);
 }
 
 void CastManager::handleDisconnected()
@@ -478,11 +574,19 @@ void CastManager::handleDisconnected()
     const bool intentional = m_intentionalClose;
     m_intentionalClose = false;
 
-    if (!intentional && (m_connected || m_casting)) {
-        const QString message = tr("Chromecast connection closed.");
-        qWarning() << "SailVideo Cast:" << message;
-        setLastError(message);
-        setStatusText(message);
+    if (intentional) {
+        clearSessionState(true);
+        return;
+    }
+
+    if (canReconnect()) {
+        scheduleReconnect(tr("Chromecast connection closed."));
+        return;
+    }
+
+    if (m_connected || m_casting || m_rejoining) {
+        failConnection(tr("Chromecast connection closed."));
+        return;
     }
 
     clearSessionState(true);
@@ -1110,6 +1214,15 @@ void CastManager::processReceiverStatus(const QJsonObject &message)
         return;
     }
 
+    if (m_rejoining) {
+        // Query the media already playing on the receiver; do not issue
+        // another LOAD merely because the sender control socket reconnected.
+        if (!m_transportId.isEmpty()) {
+            sendMediaStatus();
+        }
+        return;
+    }
+
     if (!m_pendingMediaUrl.isEmpty() && !m_loadSent) {
         if (!initialVolumeReady || !initialMuteReady) {
             setStatusText(tr("Preparing Cast audio on %1").arg(m_deviceName));
@@ -1144,6 +1257,14 @@ void CastManager::processMediaStatus(const QJsonObject &message)
     }
 
     const QJsonObject status = statuses.at(0).toObject();
+
+    if (m_reconnectAttempts > 0 || m_reconnectScheduled) {
+        qInfo() << "SailVideo Cast: control channel rejoined successfully";
+        m_reconnectTimer.stop();
+        m_reconnectScheduled = false;
+        m_reconnectAttempts = 0;
+    }
+
     const int sessionId = status.value(QStringLiteral("mediaSessionId")).toInt();
     if (sessionId > 0) {
         m_mediaSessionId = sessionId;

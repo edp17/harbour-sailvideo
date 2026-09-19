@@ -1,6 +1,6 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
-Version:    1.1.0.9
+Version:    1.1.0.10
 Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
@@ -57,6 +57,12 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Fri Sep 18 2026 edp17 <edp17@pm.me> - 1.1.0.10-1
+- Fix Chromecast discovery on fresh installations with an empty receiver cache
+- Keep long local/SMB Cast streams from starving Cast control processing
+- Automatically rejoin the Cast control channel after transient receiver disconnects
+- Preserve active TV media and the LAN bridge while the control channel reconnects
+
 * Fri Sep 18 2026 edp17 <edp17@pm.me> - 1.1.0.9-1
 - Release SailVideo 1.1 with native Google Chromecast support
 - Integrate Cast discovery/device selection and controls into Player and Picture Viewer

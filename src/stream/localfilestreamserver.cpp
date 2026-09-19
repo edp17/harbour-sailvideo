@@ -477,7 +477,10 @@ void LocalFileStreamServer::pumpClientData(QTcpSocket *socket)
         return;
     }
 
-    while (transfer->remaining > 0 && socket->bytesToWrite() < MaxBufferedBytes) {
+    // Pump at most one chunk per event-loop turn. Synchronous libsmb2 reads
+    // must not continuously occupy the same Qt thread that services Cast-V2
+    // heartbeat/control traffic.
+    if (transfer->remaining > 0 && socket->bytesToWrite() < MaxBufferedBytes) {
         const qint64 wanted = qMin(ChunkSize, transfer->remaining);
         QByteArray data;
 
@@ -488,34 +491,27 @@ void LocalFileStreamServer::pumpClientData(QTcpSocket *socket)
             data = transfer->smbReader->read(transfer->nextOffset, wanted, &error);
             if (data.isEmpty() && !error.isEmpty()) {
                 setLastError(tr("SMB stream read failed: %1").arg(error));
-                break;
             }
         }
 
-        if (data.isEmpty()) {
-            break;
-        }
-
-        // A seek commonly abandons the previous HTTP Range connection.
-        // Free that stale transfer instead of feeding it after disconnect.
-        if (socket->state() == QAbstractSocket::UnconnectedState) {
-            closeTransfer(socket);
-            return;
-        }
-
-        const qint64 written = socket->write(data);
-        if (written <= 0) {
-            break;
-        }
-
-        transfer->remaining -= written;
-        transfer->nextOffset += written;
-        if (written < data.size()) {
-            if (transfer->file) {
-                transfer->file->seek(transfer->file->pos() - (data.size() - written));
+        if (!data.isEmpty()) {
+            if (socket->state() == QAbstractSocket::UnconnectedState) {
+                closeTransfer(socket);
+                return;
             }
-            transfer->nextOffset -= (data.size() - written);
-            break;
+
+            const qint64 written = socket->write(data);
+            if (written > 0) {
+                transfer->remaining -= written;
+                transfer->nextOffset += written;
+                if (written < data.size()) {
+                    if (transfer->file) {
+                        transfer->file->seek(
+                                    transfer->file->pos() - (data.size() - written));
+                    }
+                    transfer->nextOffset -= (data.size() - written);
+                }
+            }
         }
     }
 

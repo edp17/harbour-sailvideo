@@ -120,6 +120,7 @@ private slots:
     void handleSslErrors(const QList<QSslError> &errors);
     void pollStatus();
     void handleDisconnectTimeout();
+    void attemptReconnect();
 
 private:
     struct Envelope {
@@ -172,6 +173,9 @@ private:
     void processMediaStatus(const QJsonObject &message);
     void processProtocolError(const QJsonObject &message);
     void finishDisconnect();
+    bool canReconnect() const;
+    void scheduleReconnect(const QString &reason);
+    void failConnection(const QString &message);
 
     int nextRequestId();
 
@@ -179,6 +183,7 @@ private:
     QByteArray m_readBuffer;
     QTimer m_pollTimer;
     QTimer m_disconnectTimer;
+    QTimer m_reconnectTimer;
 
     bool m_connected = false;
     bool m_casting = false;
@@ -191,6 +196,8 @@ private:
     bool m_launchSent = false;
     bool m_loadSent = false;
     bool m_finishedEmitted = false;
+    bool m_reconnectScheduled = false;
+    int m_reconnectAttempts = 0;
 
     QString m_deviceName;
     QString m_host;

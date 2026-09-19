@@ -45,9 +45,23 @@ PullDownMenu {
               ? qsTr("Stop Chromecast scan")
               : qsTr("Scan for Chromecast")
         onClicked: {
-            appWindow.prepareCastTarget(root.sourceKind)
-            if (castDeviceModel.discovering) castDeviceModel.stopDiscovery()
-            else castDeviceModel.startDiscovery()
+            // On a fresh install prepareCastTarget() starts discovery itself.
+            // Calling it here made the old toggle immediately stop that scan.
+            appWindow.castTargetKind = root.sourceKind === "picture"
+                    ? "picture"
+                    : "video"
+
+            if (castDeviceModel.discovering) {
+                castDeviceModel.stopDiscovery()
+                appWindow.showAdjustmentStatus(qsTr("Chromecast scan stopped"))
+            } else {
+                castDeviceModel.startDiscovery()
+                if (castDeviceModel.discovering) {
+                    appWindow.showAdjustmentStatus(qsTr("Scanning for Chromecast…"))
+                } else if (castDeviceModel.lastError.length > 0) {
+                    appWindow.showAdjustmentStatus(castDeviceModel.lastError)
+                }
+            }
         }
     }
 

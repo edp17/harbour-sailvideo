@@ -1,7 +1,7 @@
 # SailVideo 1.1 release testing checklist
 
 This is the minimum device checklist before publishing SailVideo 1.1
-(package version 1.1.0.9).
+(package version 1.1.0.10).
 
 ## Startup and Sailjail
 
@@ -158,3 +158,13 @@ Use a known-good H.264/AAC MP4.
   saved-root boundary is retained.
 - With multiple saved source folders on one SMB share, confirm each source keeps
   its own independent root boundary.
+
+## 1.1.0.10 Chromecast hotfix
+
+- On a device with no remembered Chromecast cache, choose Scan for Chromecast
+  once, wait a few seconds and reopen the pulley menu. The receiver must appear.
+- Cast a local video for at least 15 minutes.
+- Cast an SMB/NAS video for at least 15 minutes.
+- Confirm Cast controls stay connected.
+- If the receiver transiently closes the control channel, SailVideo should show
+  Reconnecting and recover without stopping/reloading the TV media.

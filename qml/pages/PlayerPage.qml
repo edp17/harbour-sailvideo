@@ -446,7 +446,9 @@ Page {
 
             Label {
                 width: parent.width
-                text: qsTr("This video format is not supported by Chromecast.")
+                text: appWindow.castUnsupportedVideoMessage.length > 0
+                      ? appWindow.castUnsupportedVideoMessage
+                      : qsTr("This video format is not supported by Chromecast.")
                 color: Theme.secondaryColor
                 font.pixelSize: Theme.fontSizeSmall
                 horizontalAlignment: Text.AlignHCenter
@@ -463,6 +465,7 @@ Page {
                      || appWindow.player.status === MediaPlayer.Buffering
                      || appWindow.player.status === MediaPlayer.Stalled
                      || appWindow.playbackError.length > 0
+                     || appWindow.aviCastPending
                      || appWindow.videoCastActive)
         anchors.centerIn: parent
         width: Math.min(parent.width - 2 * Theme.horizontalPageMargin,

@@ -29,6 +29,7 @@
 #include "application/appsettings.h"
 #include "cast/castdevicemodel.h"
 #include "cast/castmanager.h"
+#include "cast/castmediapreparer.h"
 #include "media/playbackhistorymodel.h"
 #include "media/localvideomodel.h"
 #include "media/localvideocategorymodel.h"
@@ -91,6 +92,7 @@ int main(int argc, char *argv[])
     AppSettings appSettings(nasSources.storageDirectory());
     CastDeviceModel castDeviceModel(nasSources.storageDirectory());
     CastManager castManager;
+    CastMediaPreparer castMediaPreparer(nasSources.storageDirectory());
     QObject::connect(app.data(), &QGuiApplication::aboutToQuit,
                      &appSettings, [&appSettings]() { appSettings.save(); });
     SmbBackend smbBackend;
@@ -148,6 +150,9 @@ int main(int argc, char *argv[])
     view->rootContext()->setContextProperty(
         QStringLiteral("castManager"),
         &castManager);
+    view->rootContext()->setContextProperty(
+        QStringLiteral("castMediaPreparer"),
+        &castMediaPreparer);
 
     qInfo() << "SailVideo: URL download cache helper exposed";
     qInfo() << "SailVideo: URL sources saved to" << networkSources.storagePath();

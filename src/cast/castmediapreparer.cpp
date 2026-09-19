@@ -1,0 +1,1084 @@
+/*
+ * Copyright (C) 2026 edp17
+ *
+ * This file is part of SailVideo and is licensed under GPL-3.0-or-later.
+ */
+
+#include "castmediapreparer.h"
+
+#include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QMetaObject>
+#include <QStandardPaths>
+#include <QUrl>
+
+namespace {
+
+QString defaultStorageDirectory()
+{
+    QString base = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (base.isEmpty()) {
+        base = QDir::home().filePath(QStringLiteral(".local/share"));
+    }
+
+    const QString organization = QCoreApplication::organizationName().trimmed().isEmpty()
+            ? QStringLiteral("org.edp17")
+            : QCoreApplication::organizationName().trimmed();
+    const QString application = QCoreApplication::applicationName().trimmed().isEmpty()
+            ? QStringLiteral("SailVideo")
+            : QCoreApplication::applicationName().trimmed();
+
+    return QDir(base).filePath(organization + QLatin1Char('/') + application);
+}
+
+QString capsName(GstCaps *caps)
+{
+    if (!caps || gst_caps_is_empty(caps) || gst_caps_get_size(caps) == 0) {
+        return QString();
+    }
+
+    const GstStructure *structure = gst_caps_get_structure(caps, 0);
+    if (!structure) {
+        return QString();
+    }
+
+    return QString::fromLatin1(gst_structure_get_name(structure));
+}
+
+QString capsDebugString(GstCaps *caps)
+{
+    if (!caps) {
+        return QStringLiteral("<no caps>");
+    }
+
+    gchar *text = gst_caps_to_string(caps);
+    const QString result = text
+            ? QString::fromUtf8(text)
+            : QStringLiteral("<unknown caps>");
+    g_free(text);
+    return result;
+}
+
+bool hasFactory(const char *name)
+{
+    GstElementFactory *factory = gst_element_factory_find(name);
+    if (!factory) {
+        return false;
+    }
+    gst_object_unref(factory);
+    return true;
+}
+
+void syncWithParent(const QList<GstElement *> &elements)
+{
+    for (GstElement *element : elements) {
+        if (element) {
+            gst_element_sync_state_with_parent(element);
+        }
+    }
+}
+
+int evenDimension(int value)
+{
+    if (value < 2) {
+        return 2;
+    }
+    return value - (value % 2);
+}
+
+} // namespace
+
+CastMediaPreparer::CastMediaPreparer(const QString &storageDirectory,
+                                     QObject *parent)
+    : QObject(parent)
+    , m_storageDirectory(storageDirectory.trimmed().isEmpty()
+                         ? defaultStorageDirectory()
+                         : storageDirectory.trimmed())
+{
+    // QtMultimedia already uses GStreamer on Sailfish. gst_init() is idempotent
+    // and lets this Cast-only helper use the same installed framework.
+    gst_init(nullptr, nullptr);
+
+    m_busTimer.setInterval(100);
+    m_busTimer.setSingleShot(false);
+    connect(&m_busTimer, SIGNAL(timeout()), this, SLOT(pollBus()));
+
+    clearOldCache();
+}
+
+CastMediaPreparer::~CastMediaPreparer()
+{
+    cancel();
+}
+
+bool CastMediaPreparer::busy() const
+{
+    return m_busy.load();
+}
+
+QString CastMediaPreparer::lastError() const
+{
+    return m_lastError;
+}
+
+QString CastMediaPreparer::cacheDirectory() const
+{
+    return QDir(m_storageDirectory).filePath(QStringLiteral("cast-remux-cache"));
+}
+
+void CastMediaPreparer::clearOldCache()
+{
+    QDir directory(cacheDirectory());
+    if (!directory.exists()) {
+        return;
+    }
+
+    const QStringList filters = QStringList()
+            << QStringLiteral("*.mp4")
+            << QStringLiteral("*.webm")
+            << QStringLiteral("*.part");
+    const QStringList files = directory.entryList(filters, QDir::Files);
+    for (const QString &fileName : files) {
+        directory.remove(fileName);
+    }
+}
+
+QString CastMediaPreparer::normalizedInputUrl(const QString &inputUrl) const
+{
+    const QString clean = inputUrl.trimmed();
+    if (clean.isEmpty()) {
+        return QString();
+    }
+
+    QUrl url(clean);
+    if (url.isLocalFile()) {
+        const QFileInfo info(url.toLocalFile());
+        if (!info.exists() || !info.isFile() || !info.isReadable()) {
+            return QString();
+        }
+        return QUrl::fromLocalFile(info.absoluteFilePath()).toString();
+    }
+
+    if (url.scheme().isEmpty()) {
+        const QFileInfo info(clean);
+        if (info.isAbsolute() && info.exists() && info.isFile() && info.isReadable()) {
+            return QUrl::fromLocalFile(info.absoluteFilePath()).toString();
+        }
+        return QString();
+    }
+
+    const QString scheme = url.scheme().toLower();
+    if (scheme == QLatin1String("http") || scheme == QLatin1String("https")) {
+        return url.toString();
+    }
+
+    return QString();
+}
+
+QString CastMediaPreparer::outputPathForKey(const QString &sourceKey,
+                                             const QString &suffix) const
+{
+    const QByteArray hash = QCryptographicHash::hash(
+                sourceKey.toUtf8(), QCryptographicHash::Sha1).toHex();
+    return QDir(cacheDirectory()).filePath(
+                QString::fromLatin1(hash)
+                + QLatin1Char('.')
+                + suffix);
+}
+
+QString CastMediaPreparer::contentTypeForPath(const QString &path) const
+{
+    return path.endsWith(QStringLiteral(".webm"), Qt::CaseInsensitive)
+            ? QStringLiteral("video/webm")
+            : QStringLiteral("video/mp4");
+}
+
+bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
+                                   const QString &sourceKey)
+{
+    if (m_busy.load()) {
+        setLastError(tr("Another AVI file is already being prepared for Chromecast."));
+        return false;
+    }
+
+    const QString normalized = normalizedInputUrl(inputUrl);
+    if (normalized.isEmpty()) {
+        setLastError(tr("The AVI playback source cannot be opened for Chromecast preparation."));
+        return false;
+    }
+
+    const QString key = sourceKey.trimmed().isEmpty()
+            ? normalized
+            : sourceKey.trimmed();
+
+    const QString cachedPath = m_preparedFiles.value(key);
+    if (!cachedPath.isEmpty()) {
+        const QFileInfo cached(cachedPath);
+        if (cached.exists() && cached.isFile() && cached.size() > 1024) {
+            setLastError(QString());
+            const QString fileUrl = QUrl::fromLocalFile(
+                        cached.absoluteFilePath()).toString();
+            const QString contentType = contentTypeForPath(cached.absoluteFilePath());
+            QTimer::singleShot(0, this, [this, key, fileUrl, contentType]() {
+                emit ready(key, fileUrl, contentType);
+            });
+            return true;
+        }
+        m_preparedFiles.remove(key);
+    }
+
+    QDir directory(cacheDirectory());
+    if (!directory.exists() && !directory.mkpath(QStringLiteral("."))) {
+        setLastError(tr("Could not create the temporary Chromecast preparation directory."));
+        return false;
+    }
+
+    m_inputUrl = normalized;
+    m_sourceKey = key;
+    m_outputPath = outputPathForKey(key, QStringLiteral("mp4"));
+    m_partPath = m_outputPath + QStringLiteral(".part");
+    QFile::remove(outputPathForKey(key, QStringLiteral("mp4")));
+    QFile::remove(outputPathForKey(key, QStringLiteral("webm")));
+    QFile::remove(outputPathForKey(key, QStringLiteral("mp4")) + QStringLiteral(".part"));
+    QFile::remove(outputPathForKey(key, QStringLiteral("webm")) + QStringLiteral(".part"));
+
+    m_videoLinked.store(false);
+    m_audioLinked.store(false);
+    m_fallbackScheduled.store(false);
+    m_mode.store(RemuxMp4Mode);
+    setLastError(QString());
+    setBusy(true);
+
+    QString error;
+    if (!startRemuxPipeline(&error)) {
+        teardownPipeline();
+        QFile::remove(m_partPath);
+        setBusy(false);
+        m_mode.store(NoPreparationMode);
+        setLastError(error);
+        return false;
+    }
+
+    qInfo() << "SailVideo Cast remux: trying lossless AVI -> MP4 preparation";
+    return true;
+}
+
+void CastMediaPreparer::cancel()
+{
+    if (!m_busy.load() && !m_pipeline) {
+        return;
+    }
+
+    setBusy(false);
+    m_mode.store(NoPreparationMode);
+    m_fallbackScheduled.store(false);
+    teardownPipeline();
+
+    if (!m_partPath.isEmpty()) {
+        QFile::remove(m_partPath);
+    }
+
+    m_inputUrl.clear();
+    m_sourceKey.clear();
+    m_outputPath.clear();
+    m_partPath.clear();
+    m_videoLinked.store(false);
+    m_audioLinked.store(false);
+}
+
+bool CastMediaPreparer::configureOutput(PreparationMode mode,
+                                        QString *errorMessage)
+{
+    if (!m_pipeline) {
+        if (errorMessage) {
+            *errorMessage = tr("The Chromecast preparation pipeline is unavailable.");
+        }
+        return false;
+    }
+
+    const QString suffix = mode == TranscodeWebmMode
+            ? QStringLiteral("webm")
+            : QStringLiteral("mp4");
+    m_outputPath = outputPathForKey(m_sourceKey, suffix);
+    m_partPath = m_outputPath + QStringLiteral(".part");
+    QFile::remove(m_outputPath);
+    QFile::remove(m_partPath);
+
+    m_mux = gst_element_factory_make(
+                mode == TranscodeWebmMode ? "webmmux" : "mp4mux",
+                "mux");
+    m_sink = gst_element_factory_make("filesink", "sink");
+    if (!m_mux || !m_sink) {
+        if (errorMessage) {
+            *errorMessage = mode == TranscodeWebmMode
+                    ? tr("Required GStreamer WebM output components are unavailable.")
+                    : tr("Required GStreamer MP4 output components are unavailable.");
+        }
+        return false;
+    }
+
+    if (mode == RemuxMp4Mode) {
+        g_object_set(G_OBJECT(m_mux), "faststart", TRUE, nullptr);
+    }
+
+    const QByteArray outputPath = m_partPath.toUtf8();
+    g_object_set(G_OBJECT(m_sink), "location", outputPath.constData(), nullptr);
+
+    gst_bin_add_many(GST_BIN(m_pipeline), m_mux, m_sink, nullptr);
+    if (!gst_element_link(m_mux, m_sink)) {
+        if (errorMessage) {
+            *errorMessage = tr("Could not connect the prepared-media muxer to its temporary file.");
+        }
+        return false;
+    }
+
+    return true;
+}
+
+bool CastMediaPreparer::startRemuxPipeline(QString *errorMessage)
+{
+    const QByteArray uri = m_inputUrl.toUtf8();
+    GError *uriError = nullptr;
+
+    m_pipeline = gst_pipeline_new("sailvideo-cast-avi-remux");
+    m_source = gst_element_make_from_uri(GST_URI_SRC,
+                                         uri.constData(),
+                                         "source",
+                                         &uriError);
+    m_demux = gst_element_factory_make("avidemux", "demux");
+
+    if (!m_pipeline || !m_source || !m_demux) {
+        QString detail;
+        if (uriError && uriError->message) {
+            detail = QString::fromUtf8(uriError->message);
+        }
+        if (uriError) {
+            g_error_free(uriError);
+        }
+
+        if (errorMessage) {
+            *errorMessage = detail.isEmpty()
+                    ? tr("Required GStreamer AVI demux components are unavailable.")
+                    : tr("Could not open the AVI preparation source: %1").arg(detail);
+        }
+        return false;
+    }
+
+    if (uriError) {
+        g_error_free(uriError);
+    }
+
+    if (!configureOutput(RemuxMp4Mode, errorMessage)) {
+        return false;
+    }
+
+    gst_bin_add_many(GST_BIN(m_pipeline),
+                     m_source,
+                     m_demux,
+                     nullptr);
+
+    if (!gst_element_link(m_source, m_demux)) {
+        if (errorMessage) {
+            *errorMessage = tr("Could not construct the AVI demux pipeline.");
+        }
+        return false;
+    }
+
+    g_signal_connect(m_demux,
+                     "pad-added",
+                     G_CALLBACK(&CastMediaPreparer::demuxPadAddedThunk),
+                     this);
+
+    m_bus = gst_element_get_bus(m_pipeline);
+
+    const GstStateChangeReturn state = gst_element_set_state(
+                m_pipeline, GST_STATE_PLAYING);
+    if (state == GST_STATE_CHANGE_FAILURE) {
+        if (errorMessage) {
+            *errorMessage = tr("GStreamer could not start the AVI remux pipeline.");
+        }
+        return false;
+    }
+
+    m_busTimer.start();
+    return true;
+}
+
+bool CastMediaPreparer::startTranscodePipeline(QString *errorMessage)
+{
+    if (!hasFactory("uridecodebin")
+            || !hasFactory("vp8enc")
+            || !hasFactory("vorbisenc")
+            || !hasFactory("webmmux")) {
+        if (errorMessage) {
+            *errorMessage = tr("This AVI requires transcoding, but the required Sailfish GStreamer VP8/Vorbis components are unavailable.");
+        }
+        return false;
+    }
+
+    m_pipeline = gst_pipeline_new("sailvideo-cast-avi-transcode");
+    m_source = gst_element_factory_make("uridecodebin", "decode");
+
+    if (!m_pipeline || !m_source) {
+        if (errorMessage) {
+            *errorMessage = tr("Could not create the AVI transcoding decoder.");
+        }
+        return false;
+    }
+
+    if (!configureOutput(TranscodeWebmMode, errorMessage)) {
+        return false;
+    }
+
+    const QByteArray uri = m_inputUrl.toUtf8();
+    g_object_set(G_OBJECT(m_source), "uri", uri.constData(), nullptr);
+
+    gst_bin_add(GST_BIN(m_pipeline), m_source);
+
+    g_signal_connect(m_source,
+                     "pad-added",
+                     G_CALLBACK(&CastMediaPreparer::decodedPadAddedThunk),
+                     this);
+
+    m_bus = gst_element_get_bus(m_pipeline);
+
+    const GstStateChangeReturn state = gst_element_set_state(
+                m_pipeline, GST_STATE_PLAYING);
+    if (state == GST_STATE_CHANGE_FAILURE) {
+        if (errorMessage) {
+            *errorMessage = tr("GStreamer could not start the AVI transcoding pipeline.");
+        }
+        return false;
+    }
+
+    m_busTimer.start();
+    return true;
+}
+
+void CastMediaPreparer::demuxPadAddedThunk(GstElement *demux,
+                                           GstPad *pad,
+                                           gpointer userData)
+{
+    Q_UNUSED(demux)
+    CastMediaPreparer *self = static_cast<CastMediaPreparer *>(userData);
+    if (self) {
+        self->handleDemuxPadAdded(pad);
+    }
+}
+
+void CastMediaPreparer::decodedPadAddedThunk(GstElement *decodebin,
+                                             GstPad *pad,
+                                             gpointer userData)
+{
+    CastMediaPreparer *self = static_cast<CastMediaPreparer *>(userData);
+    if (self) {
+        self->handleDecodedPadAdded(decodebin, pad);
+    }
+}
+
+void CastMediaPreparer::handleDemuxPadAdded(GstPad *pad)
+{
+    if (!m_busy.load()
+            || m_mode.load() != RemuxMp4Mode
+            || m_fallbackScheduled.load()
+            || !m_pipeline
+            || !pad) {
+        return;
+    }
+
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps) {
+        caps = gst_pad_query_caps(pad, nullptr);
+    }
+
+    const QString name = capsName(caps);
+    const QString debugCaps = capsDebugString(caps);
+
+    if (name.startsWith(QStringLiteral("video/"))) {
+        if (m_videoLinked.load()) {
+            discardPad(pad);
+        } else if (name == QLatin1String("video/x-h264")) {
+            if (linkPadThroughParser(pad, "h264parse")) {
+                m_videoLinked.store(true);
+                qInfo() << "SailVideo Cast remux: AVI video is H.264; keeping original video stream";
+            } else {
+                requestTranscodeFallback(
+                            tr("The H.264 stream could not be copied directly."));
+            }
+        } else {
+            qInfo() << "SailVideo Cast remux: AVI video needs transcoding; caps"
+                    << debugCaps;
+            discardPad(pad);
+            requestTranscodeFallback(
+                        tr("AVI video is not H.264 and requires transcoding."));
+        }
+    } else if (name.startsWith(QStringLiteral("audio/"))) {
+        if (m_audioLinked.load()) {
+            discardPad(pad);
+        } else {
+            const GstStructure *structure = caps && gst_caps_get_size(caps) > 0
+                    ? gst_caps_get_structure(caps, 0)
+                    : nullptr;
+            gint mpegVersion = 0;
+            gint layer = 0;
+            const bool hasMpegVersion = structure
+                    && gst_structure_get_int(structure, "mpegversion", &mpegVersion);
+            const bool hasLayer = structure
+                    && gst_structure_get_int(structure, "layer", &layer);
+
+            const char *parser = nullptr;
+            if (name == QLatin1String("audio/mpeg")
+                    && hasMpegVersion
+                    && mpegVersion == 4) {
+                parser = "aacparse";
+            } else if (name == QLatin1String("audio/mpeg")
+                       && hasMpegVersion
+                       && mpegVersion == 1
+                       && hasLayer
+                       && layer == 3) {
+                parser = "mpegaudioparse";
+            }
+
+            if (parser && linkPadThroughParser(pad, parser)) {
+                m_audioLinked.store(true);
+                qInfo() << "SailVideo Cast remux: AVI audio is"
+                        << (mpegVersion == 4 ? "AAC" : "MP3")
+                        << "; keeping original audio stream";
+            } else {
+                qInfo() << "SailVideo Cast remux: AVI audio needs transcoding; caps"
+                        << debugCaps;
+                discardPad(pad);
+                requestTranscodeFallback(
+                            tr("AVI audio cannot be copied directly and requires transcoding."));
+            }
+        }
+    } else {
+        discardPad(pad);
+    }
+
+    if (caps) {
+        gst_caps_unref(caps);
+    }
+}
+
+void CastMediaPreparer::handleDecodedPadAdded(GstElement *decodebin,
+                                              GstPad *pad)
+{
+    Q_UNUSED(decodebin)
+
+    if (!m_busy.load()
+            || m_mode.load() != TranscodeWebmMode
+            || !m_pipeline
+            || !pad) {
+        return;
+    }
+
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps) {
+        caps = gst_pad_query_caps(pad, nullptr);
+    }
+
+    const QString name = capsName(caps);
+    const QString debugCaps = capsDebugString(caps);
+
+    if (name.startsWith(QStringLiteral("video/x-raw"))) {
+        if (m_videoLinked.load()) {
+            discardPad(pad);
+        } else if (linkDecodedVideoPad(pad)) {
+            m_videoLinked.store(true);
+            qInfo() << "SailVideo Cast transcode: decoded video -> VP8/WebM; caps"
+                    << debugCaps;
+        } else {
+            QMetaObject::invokeMethod(
+                        this,
+                        "startTranscodeFallback",
+                        Qt::QueuedConnection,
+                        Q_ARG(QString,
+                              tr("The decoded AVI video could not be connected to the VP8 encoder.")));
+        }
+    } else if (name.startsWith(QStringLiteral("audio/x-raw"))) {
+        if (m_audioLinked.load()) {
+            discardPad(pad);
+        } else if (linkDecodedAudioPad(pad)) {
+            m_audioLinked.store(true);
+            qInfo() << "SailVideo Cast transcode: decoded audio -> Vorbis/WebM; caps"
+                    << debugCaps;
+        } else {
+            QMetaObject::invokeMethod(
+                        this,
+                        "startTranscodeFallback",
+                        Qt::QueuedConnection,
+                        Q_ARG(QString,
+                              tr("The decoded AVI audio could not be connected to the Vorbis encoder.")));
+        }
+    } else {
+        discardPad(pad);
+    }
+
+    if (caps) {
+        gst_caps_unref(caps);
+    }
+}
+
+bool CastMediaPreparer::linkPadThroughParser(GstPad *pad,
+                                             const char *parserFactory)
+{
+    GstElement *queue = gst_element_factory_make("queue", nullptr);
+    GstElement *parser = gst_element_factory_make(parserFactory, nullptr);
+    if (!queue || !parser) {
+        if (queue) gst_object_unref(queue);
+        if (parser) gst_object_unref(parser);
+        return false;
+    }
+
+    gst_bin_add_many(GST_BIN(m_pipeline), queue, parser, nullptr);
+
+    if (!gst_element_link(queue, parser)
+            || !gst_element_link(parser, m_mux)) {
+        gst_element_set_state(queue, GST_STATE_NULL);
+        gst_element_set_state(parser, GST_STATE_NULL);
+        gst_bin_remove(GST_BIN(m_pipeline), queue);
+        gst_bin_remove(GST_BIN(m_pipeline), parser);
+        return false;
+    }
+
+    syncWithParent(QList<GstElement *>() << queue << parser);
+
+    GstPad *queueSink = gst_element_get_static_pad(queue, "sink");
+    if (!queueSink) {
+        return false;
+    }
+
+    const GstPadLinkReturn result = gst_pad_link(pad, queueSink);
+    gst_object_unref(queueSink);
+    return result == GST_PAD_LINK_OK;
+}
+
+bool CastMediaPreparer::linkDecodedVideoPad(GstPad *pad)
+{
+    GstElement *queue = gst_element_factory_make("queue", nullptr);
+    GstElement *convert = gst_element_factory_make("videoconvert", nullptr);
+    GstElement *scale = gst_element_factory_make("videoscale", nullptr);
+    GstElement *filter = gst_element_factory_make("capsfilter", nullptr);
+    GstElement *encoder = gst_element_factory_make("vp8enc", nullptr);
+    GstElement *outputQueue = gst_element_factory_make("queue", nullptr);
+
+    if (!queue || !convert || !scale || !filter || !encoder || !outputQueue) {
+        if (queue) gst_object_unref(queue);
+        if (convert) gst_object_unref(convert);
+        if (scale) gst_object_unref(scale);
+        if (filter) gst_object_unref(filter);
+        if (encoder) gst_object_unref(encoder);
+        if (outputQueue) gst_object_unref(outputQueue);
+        return false;
+    }
+
+    int sourceWidth = 0;
+    int sourceHeight = 0;
+    GstCaps *inputCaps = gst_pad_get_current_caps(pad);
+    if (inputCaps && gst_caps_get_size(inputCaps) > 0) {
+        const GstStructure *structure = gst_caps_get_structure(inputCaps, 0);
+        if (structure) {
+            gst_structure_get_int(structure, "width", &sourceWidth);
+            gst_structure_get_int(structure, "height", &sourceHeight);
+        }
+    }
+
+    int targetWidth = sourceWidth;
+    int targetHeight = sourceHeight;
+    if (sourceWidth > 0 && sourceHeight > 0
+            && (sourceWidth > 1280 || sourceHeight > 720)) {
+        const double widthScale = 1280.0 / double(sourceWidth);
+        const double heightScale = 720.0 / double(sourceHeight);
+        const double factor = qMin(widthScale, heightScale);
+        targetWidth = evenDimension(int(sourceWidth * factor));
+        targetHeight = evenDimension(int(sourceHeight * factor));
+    }
+
+    GstCaps *rawCaps = nullptr;
+    if (targetWidth > 0 && targetHeight > 0) {
+        rawCaps = gst_caps_new_simple("video/x-raw",
+                                     "format", G_TYPE_STRING, "I420",
+                                     "width", G_TYPE_INT, targetWidth,
+                                     "height", G_TYPE_INT, targetHeight,
+                                     nullptr);
+    } else {
+        rawCaps = gst_caps_new_simple("video/x-raw",
+                                     "format", G_TYPE_STRING, "I420",
+                                     nullptr);
+    }
+    g_object_set(G_OBJECT(filter), "caps", rawCaps, nullptr);
+    gst_caps_unref(rawCaps);
+
+    const guint bitrate = targetWidth > 960 || targetHeight > 540
+            ? 3000000u
+            : 1600000u;
+    g_object_set(G_OBJECT(encoder), "target-bitrate", bitrate, nullptr);
+
+    if (g_object_class_find_property(G_OBJECT_GET_CLASS(encoder), "deadline")) {
+        g_object_set(G_OBJECT(encoder), "deadline", gint64(1), nullptr);
+    }
+    if (g_object_class_find_property(G_OBJECT_GET_CLASS(encoder), "cpu-used")) {
+        g_object_set(G_OBJECT(encoder), "cpu-used", 8, nullptr);
+    }
+
+    gst_bin_add_many(GST_BIN(m_pipeline),
+                     queue,
+                     convert,
+                     scale,
+                     filter,
+                     encoder,
+                     outputQueue,
+                     nullptr);
+
+    const bool linked = gst_element_link_many(queue,
+                                              convert,
+                                              scale,
+                                              filter,
+                                              encoder,
+                                              outputQueue,
+                                              nullptr)
+            && gst_element_link(outputQueue, m_mux);
+    if (!linked) {
+        return false;
+    }
+
+    syncWithParent(QList<GstElement *>()
+                   << queue << convert << scale << filter << encoder << outputQueue);
+
+    GstPad *queueSink = gst_element_get_static_pad(queue, "sink");
+    if (!queueSink) {
+        return false;
+    }
+
+    const GstPadLinkReturn result = gst_pad_link(pad, queueSink);
+    gst_object_unref(queueSink);
+
+    if (inputCaps) {
+        gst_caps_unref(inputCaps);
+    }
+
+    if (result == GST_PAD_LINK_OK) {
+        qInfo() << "SailVideo Cast transcode: VP8 target"
+                << targetWidth << "x" << targetHeight
+                << "bitrate" << bitrate;
+        return true;
+    }
+
+    return false;
+}
+
+bool CastMediaPreparer::linkDecodedAudioPad(GstPad *pad)
+{
+    GstElement *queue = gst_element_factory_make("queue", nullptr);
+    GstElement *convert = gst_element_factory_make("audioconvert", nullptr);
+    GstElement *resample = gst_element_factory_make("audioresample", nullptr);
+    GstElement *filter = gst_element_factory_make("capsfilter", nullptr);
+    GstElement *encoder = gst_element_factory_make("vorbisenc", nullptr);
+    GstElement *outputQueue = gst_element_factory_make("queue", nullptr);
+
+    if (!queue || !convert || !resample || !filter || !encoder || !outputQueue) {
+        if (queue) gst_object_unref(queue);
+        if (convert) gst_object_unref(convert);
+        if (resample) gst_object_unref(resample);
+        if (filter) gst_object_unref(filter);
+        if (encoder) gst_object_unref(encoder);
+        if (outputQueue) gst_object_unref(outputQueue);
+        return false;
+    }
+
+    // Downmix multichannel AVI audio to stereo and use a common 48 kHz rate.
+    // This keeps the WebM output broadly compatible with Chromecast receivers.
+    GstCaps *audioCaps = gst_caps_new_simple("audio/x-raw",
+                                            "channels", G_TYPE_INT, 2,
+                                            "rate", G_TYPE_INT, 48000,
+                                            nullptr);
+    g_object_set(G_OBJECT(filter), "caps", audioCaps, nullptr);
+    gst_caps_unref(audioCaps);
+
+    gst_bin_add_many(GST_BIN(m_pipeline),
+                     queue,
+                     convert,
+                     resample,
+                     filter,
+                     encoder,
+                     outputQueue,
+                     nullptr);
+
+    const bool linked = gst_element_link_many(queue,
+                                              convert,
+                                              resample,
+                                              filter,
+                                              encoder,
+                                              outputQueue,
+                                              nullptr)
+            && gst_element_link(outputQueue, m_mux);
+    if (!linked) {
+        return false;
+    }
+
+    syncWithParent(QList<GstElement *>()
+                   << queue << convert << resample << filter << encoder << outputQueue);
+
+    GstPad *queueSink = gst_element_get_static_pad(queue, "sink");
+    if (!queueSink) {
+        return false;
+    }
+
+    const GstPadLinkReturn result = gst_pad_link(pad, queueSink);
+    gst_object_unref(queueSink);
+    return result == GST_PAD_LINK_OK;
+}
+
+bool CastMediaPreparer::discardPad(GstPad *pad)
+{
+    GstElement *sink = gst_element_factory_make("fakesink", nullptr);
+    if (!sink) {
+        return false;
+    }
+
+    g_object_set(G_OBJECT(sink), "sync", FALSE, "async", FALSE, nullptr);
+    gst_bin_add(GST_BIN(m_pipeline), sink);
+    gst_element_sync_state_with_parent(sink);
+
+    GstPad *sinkPad = gst_element_get_static_pad(sink, "sink");
+    if (!sinkPad) {
+        return false;
+    }
+
+    const GstPadLinkReturn result = gst_pad_link(pad, sinkPad);
+    gst_object_unref(sinkPad);
+    return result == GST_PAD_LINK_OK;
+}
+
+void CastMediaPreparer::requestTranscodeFallback(const QString &reason)
+{
+    if (!m_busy.load() || m_mode.load() != RemuxMp4Mode) {
+        return;
+    }
+
+    bool expected = false;
+    if (!m_fallbackScheduled.compare_exchange_strong(expected, true)) {
+        return;
+    }
+
+    QMetaObject::invokeMethod(this,
+                              "startTranscodeFallback",
+                              Qt::QueuedConnection,
+                              Q_ARG(QString, reason));
+}
+
+void CastMediaPreparer::startTranscodeFallback(const QString &reason)
+{
+    if (!m_busy.load()) {
+        return;
+    }
+
+    // If this slot is invoked while already transcoding, it represents a real
+    // transcode-branch failure rather than a request to switch modes.
+    if (m_mode.load() == TranscodeWebmMode) {
+        finishFailure(reason);
+        return;
+    }
+
+    if (m_mode.load() != RemuxMp4Mode) {
+        return;
+    }
+
+    qInfo() << "SailVideo Cast remux: lossless MP4 copy not possible;"
+            << reason;
+    qInfo() << "SailVideo Cast transcode: restarting AVI preparation as VP8/Vorbis WebM";
+
+    m_mode.store(NoPreparationMode);
+    teardownPipeline();
+    if (!m_partPath.isEmpty()) {
+        QFile::remove(m_partPath);
+    }
+
+    m_videoLinked.store(false);
+    m_audioLinked.store(false);
+    m_fallbackScheduled.store(false);
+    m_mode.store(TranscodeWebmMode);
+
+    QString error;
+    if (!startTranscodePipeline(&error)) {
+        finishFailure(error);
+        return;
+    }
+
+    emit transcodingStarted(m_sourceKey);
+}
+
+void CastMediaPreparer::pollBus()
+{
+    if (!m_busy.load() || !m_bus) {
+        return;
+    }
+
+    // The lossless pipeline can post NOT_LINKED while a queued fallback request
+    // is waiting for the Qt event loop. Let the fallback slot tear it down.
+    if (m_mode.load() == RemuxMp4Mode && m_fallbackScheduled.load()) {
+        return;
+    }
+
+    for (;;) {
+        GstMessage *message = gst_bus_pop_filtered(
+                    m_bus,
+                    static_cast<GstMessageType>(GST_MESSAGE_ERROR
+                                                | GST_MESSAGE_EOS));
+        if (!message) {
+            break;
+        }
+
+        if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ERROR) {
+            GError *error = nullptr;
+            gchar *debug = nullptr;
+            gst_message_parse_error(message, &error, &debug);
+
+            QString detail;
+            if (error && error->message) {
+                detail = QString::fromUtf8(error->message);
+            }
+            if (debug && *debug) {
+                qWarning() << "SailVideo Cast preparation GStreamer detail:"
+                           << QString::fromUtf8(debug);
+            }
+
+            if (error) g_error_free(error);
+            g_free(debug);
+            gst_message_unref(message);
+
+            if (detail.contains(QStringLiteral("No space left"),
+                                Qt::CaseInsensitive)) {
+                finishFailure(tr("There is not enough free storage to prepare this AVI for Chromecast."));
+            } else if (m_mode.load() == TranscodeWebmMode) {
+                finishFailure(detail.isEmpty()
+                              ? tr("This AVI could not be transcoded into a Chromecast-compatible WebM file.")
+                              : tr("AVI transcoding failed: %1").arg(detail));
+            } else {
+                // A remux pipeline can fail for codec/container negotiation even
+                // if the pad caps looked copy-compatible. Try the generic WebM
+                // transcode path once before surfacing an error.
+                requestTranscodeFallback(
+                            detail.isEmpty()
+                            ? tr("Lossless AVI remux failed.")
+                            : detail);
+            }
+            return;
+        }
+
+        if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_EOS) {
+            gst_message_unref(message);
+
+            if (!m_videoLinked.load()) {
+                finishFailure(m_mode.load() == TranscodeWebmMode
+                              ? tr("The AVI video stream could not be decoded for transcoding.")
+                              : tr("The AVI does not contain a Cast-compatible video stream."));
+            } else {
+                finishSuccess();
+            }
+            return;
+        }
+
+        gst_message_unref(message);
+    }
+}
+
+void CastMediaPreparer::finishSuccess()
+{
+    const QString sourceKey = m_sourceKey;
+    const QString outputPath = m_outputPath;
+    const QString partPath = m_partPath;
+    const QString contentType = contentTypeForPath(outputPath);
+    const PreparationMode finishedMode = static_cast<PreparationMode>(m_mode.load());
+
+    setBusy(false);
+    m_mode.store(NoPreparationMode);
+    m_fallbackScheduled.store(false);
+    teardownPipeline();
+
+    const QFileInfo partInfo(partPath);
+    if (!partInfo.exists() || !partInfo.isFile() || partInfo.size() <= 1024) {
+        finishFailure(tr("AVI preparation did not produce a usable Chromecast media file."));
+        return;
+    }
+
+    QFile::remove(outputPath);
+    if (!QFile::rename(partPath, outputPath)) {
+        finishFailure(tr("Could not finalise the temporary Chromecast media file."));
+        return;
+    }
+
+    m_preparedFiles.insert(sourceKey, outputPath);
+    setLastError(QString());
+
+    const QString fileUrl = QUrl::fromLocalFile(outputPath).toString();
+    qInfo() << (finishedMode == TranscodeWebmMode
+                ? "SailVideo Cast transcode: AVI prepared successfully as WebM"
+                : "SailVideo Cast remux: AVI prepared successfully as MP4");
+    emit ready(sourceKey, fileUrl, contentType);
+}
+
+void CastMediaPreparer::finishFailure(const QString &message)
+{
+    const QString sourceKey = m_sourceKey;
+
+    setBusy(false);
+    m_mode.store(NoPreparationMode);
+    m_fallbackScheduled.store(false);
+    teardownPipeline();
+    if (!m_partPath.isEmpty()) {
+        QFile::remove(m_partPath);
+    }
+
+    setLastError(message);
+    emit failed(sourceKey, message);
+}
+
+void CastMediaPreparer::teardownPipeline()
+{
+    m_busTimer.stop();
+
+    if (m_pipeline) {
+        gst_element_set_state(m_pipeline, GST_STATE_NULL);
+    }
+
+    if (m_bus) {
+        gst_object_unref(m_bus);
+        m_bus = nullptr;
+    }
+
+    if (m_pipeline) {
+        gst_object_unref(m_pipeline);
+        m_pipeline = nullptr;
+    }
+
+    m_source = nullptr;
+    m_demux = nullptr;
+    m_mux = nullptr;
+    m_sink = nullptr;
+}
+
+void CastMediaPreparer::setBusy(bool busy)
+{
+    const bool previous = m_busy.exchange(busy);
+    if (previous == busy) {
+        return;
+    }
+
+    emit busyChanged();
+}
+
+void CastMediaPreparer::setLastError(const QString &message)
+{
+    if (m_lastError == message) {
+        return;
+    }
+
+    m_lastError = message;
+    emit lastErrorChanged();
+}

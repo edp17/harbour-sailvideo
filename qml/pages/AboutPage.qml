@@ -68,7 +68,7 @@ Page {
             Label {
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
-                text: qsTr("Version 1.1.0.11")
+                text: qsTr("Version 1.1.0.12")
                 color: Theme.secondaryColor
                 horizontalAlignment: Text.AlignHCenter
             }
@@ -100,6 +100,7 @@ Page {
                            + "• Native Google Chromecast discovery with remembered devices and in-player controls\n"
                            + "• Video and NAS picture display on Chromecast\n"
                            + "• Direct URL casting and LAN Range bridge for local/SMB media\n"
+                           + "• AVI casting with lossless remuxing and VP8/Vorbis transcode fallback\n"
                            + "• Remote play/pause, seek, skip, stop/continue, volume and disconnect controls\n"
                            + "• Rejoin an ongoing Cast session after restarting SailVideo where the media source remains reachable\n"
                            + "• Fit, Crop and Stretch video scaling\n"

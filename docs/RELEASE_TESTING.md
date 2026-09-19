@@ -1,7 +1,7 @@
 # SailVideo 1.1 release testing checklist
 
 This is the minimum device checklist before publishing SailVideo 1.1
-(package version 1.1.0.11).
+(package version 1.1.0.12).
 
 ## Startup and Sailjail
 
@@ -168,3 +168,22 @@ Use a known-good H.264/AAC MP4.
 - Confirm Cast controls stay connected.
 - If the receiver transiently closes the control channel, SailVideo should show
   Reconnecting and recover without stopping/reloading the TV media.
+
+## 1.1.0.12 AVI Cast preparation
+
+- Play a local AVI containing H.264 + AAC and cast it. Confirm SailVideo shows
+  `Preparing AVI for Chromecast`, then starts playback on the receiver.
+- Repeat with H.264 + MP3 AVI.
+- Seek, pause/resume and disconnect after the prepared AVI starts casting.
+- Repeat with an SMB/NAS H.264 AVI and confirm the existing SMB bridge remains
+  stable while remuxing and casting.
+- If available, test a downloaded HTTP/HTTPS AVI source.
+- Try an MPEG-4 Part 2/Xvid/DivX-class AVI with AC-3 audio. Confirm the
+  status changes from preparation to `Transcoding AVI for Chromecast`, then
+  verify VP8/Vorbis WebM playback on the receiver.
+- While transcoding, confirm the UI remains responsive and cancelling/leaving the
+  Player does not crash.
+- Confirm ordinary MP4/MKV/WebM casting and local QtMultimedia playback are
+  unchanged.
+- Check free-storage behaviour with a constrained device and confirm a readable
+  preparation error is shown rather than a crash.

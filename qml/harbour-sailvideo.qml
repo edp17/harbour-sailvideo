@@ -89,6 +89,7 @@ ApplicationWindow {
     property bool castPictureSlideshowRunning: false
     property bool castUnsupportedVideoVisible: false
     property string castUnsupportedVideoTitle: ""
+    property string castUnsupportedVideoMessage: ""
     property bool remoteQueueSwitch: false
     property bool keepCastControlPageDuringQueueSwitch: false
 
@@ -138,6 +139,19 @@ ApplicationWindow {
     property string castLastDeviceName: ""
     property string castLastHost: ""
     property int castLastPort: 8009
+
+    // AVI Cast preparation is asynchronous. Compatible H.264/AAC/MP3
+    // tracks are remuxed losslessly; other decodable AVI streams can fall back
+    // to VP8/Vorbis WebM transcoding before the receiver LOAD.
+    property bool aviCastPending: false
+    property string aviCastPendingMode: ""
+    property string aviCastPendingSourceKey: ""
+    property string aviCastPendingDeviceName: ""
+    property string aviCastPendingHost: ""
+    property int aviCastPendingPort: 8009
+    property int aviCastPendingPosition: 0
+    property bool aviCastResumeLocalOnFailure: false
+
     property bool castMode: castRequested
                             || castManager.connected
                             || castManager.casting
@@ -408,6 +422,17 @@ ApplicationWindow {
                 && text.lastIndexOf(ending) === text.length - ending.length
     }
 
+    function isAviVideo(title, mediaUrl) {
+        var cleanUrl = cleanedValue(mediaUrl)
+        var query = cleanUrl.indexOf("?")
+        if (query >= 0) cleanUrl = cleanUrl.substring(0, query)
+        var fragment = cleanUrl.indexOf("#")
+        if (fragment >= 0) cleanUrl = cleanUrl.substring(0, fragment)
+
+        return valueEndsWithIgnoreCase(title, ".avi")
+                || valueEndsWithIgnoreCase(cleanUrl, ".avi")
+    }
+
     function castVideoFormatSupported(title, mediaUrl) {
         var cleanUrl = cleanedValue(mediaUrl)
         var query = cleanUrl.indexOf("?")
@@ -420,23 +445,214 @@ ApplicationWindow {
     }
 
     function clearUnsupportedCastVideo() {
-        var unsupportedText = qsTr("This video format is not supported by Chromecast.")
+        var genericText = qsTr("This video format is not supported by Chromecast.")
+        var previousText = castUnsupportedVideoMessage
         castUnsupportedVideoVisible = false
         castUnsupportedVideoTitle = ""
-        if (playbackError === unsupportedText) {
+        castUnsupportedVideoMessage = ""
+        if (playbackError === genericText || playbackError === previousText) {
             playbackError = ""
         }
-        if (playbackStatus === unsupportedText) {
+        if (playbackStatus === genericText || playbackStatus === previousText) {
             playbackStatus = ""
         }
     }
 
-    function rejectUnsupportedCastVideo(title) {
+    function rejectUnsupportedCastVideo(title, message) {
+        var unsupportedText = message && String(message).length > 0
+                ? String(message)
+                : qsTr("This video format is not supported by Chromecast.")
         castUnsupportedVideoVisible = true
         castUnsupportedVideoTitle = cleanedValue(title)
-        playbackError = qsTr("This video format is not supported by Chromecast.")
+        castUnsupportedVideoMessage = unsupportedText
+        playbackError = unsupportedText
         playbackStatus = playbackError
         return false
+    }
+
+    function resetPendingAviCast() {
+        aviCastPending = false
+        aviCastPendingMode = ""
+        aviCastPendingSourceKey = ""
+        aviCastPendingDeviceName = ""
+        aviCastPendingHost = ""
+        aviCastPendingPort = 8009
+        aviCastPendingPosition = 0
+        aviCastResumeLocalOnFailure = false
+    }
+
+    function failPendingAviCast(message) {
+        var shouldResume = aviCastResumeLocalOnFailure
+        var failedTitle = currentMediaTitle
+        resetPendingAviCast()
+        rejectUnsupportedCastVideo(
+                    failedTitle,
+                    message && String(message).length > 0
+                    ? String(message)
+                    : qsTr("This AVI could not be prepared for Chromecast."))
+
+        if (shouldResume
+                && !castManager.connected
+                && mediaPlayer.source
+                && String(mediaPlayer.source).length > 0) {
+            mediaPlayer.play()
+        }
+        return false
+    }
+
+    function prepareAviCast(mode, deviceName, host, port, startPosition) {
+        if (castMediaPreparer.busy) {
+            if (aviCastPending && aviCastPendingSourceKey === currentMediaUrl) {
+                // The remux output is independent of the receiver. If the user
+                // chooses another receiver while preparation is still running,
+                // honour the most recent target without restarting the remux.
+                aviCastPendingMode = mode
+                aviCastPendingDeviceName = cleanedValue(deviceName)
+                aviCastPendingHost = cleanedValue(host)
+                aviCastPendingPort = port > 0 ? port : 8009
+                aviCastPendingPosition = startPosition !== undefined && startPosition !== null
+                        ? Math.max(0, Math.round(startPosition))
+                        : aviCastPendingPosition
+                playbackStatus = qsTr("Preparing AVI for Chromecast")
+                return true
+            }
+            playbackError = qsTr("Another AVI file is already being prepared for Chromecast.")
+            playbackStatus = playbackError
+            return false
+        }
+
+        // currentPlaybackUrl is a real local file for local/downloaded media
+        // and the existing loopback Range URL for SMB media.
+        var inputUrl = cleanedValue(currentPlaybackUrl)
+        if (inputUrl.length === 0) {
+            inputUrl = cleanedValue(currentMediaUrl)
+        }
+        if (inputUrl.length === 0) {
+            playbackError = qsTr("The AVI playback source is unavailable.")
+            playbackStatus = playbackError
+            return false
+        }
+
+        var position = startPosition !== undefined && startPosition !== null
+                ? Math.max(0, Math.round(startPosition))
+                : Math.max(0, playbackPosition())
+        if (position <= 0 && lastKnownPosition > 0) {
+            position = lastKnownPosition
+        }
+
+        var wasPlaying = mediaPlayer.playbackState === MediaPlayer.PlayingState
+        if (mode === "start") {
+            savePlaybackPosition(false)
+            lastKnownPosition = position
+        }
+
+        aviCastPending = true
+        aviCastPendingMode = mode
+        aviCastPendingSourceKey = currentMediaUrl
+        aviCastPendingDeviceName = cleanedValue(deviceName)
+        aviCastPendingHost = cleanedValue(host)
+        aviCastPendingPort = port > 0 ? port : 8009
+        aviCastPendingPosition = position
+        aviCastResumeLocalOnFailure = mode === "start" && wasPlaying
+
+        clearUnsupportedCastVideo()
+        playbackError = ""
+        playbackStatus = qsTr("Preparing AVI for Chromecast")
+
+        if (wasPlaying) {
+            mediaPlayer.pause()
+        }
+
+        if (!castMediaPreparer.prepareAvi(inputUrl, currentMediaUrl)) {
+            return failPendingAviCast(castMediaPreparer.lastError)
+        }
+
+        return true
+    }
+
+    function completePreparedAviCast(sourceKey, fileUrl, contentType) {
+        if (!aviCastPending
+                || sourceKey !== aviCastPendingSourceKey
+                || sourceKey !== currentMediaUrl) {
+            return
+        }
+
+        var mode = aviCastPendingMode
+        var deviceName = aviCastPendingDeviceName
+        var host = aviCastPendingHost
+        var port = aviCastPendingPort
+        var position = aviCastPendingPosition
+        var resumeOnFailure = aviCastResumeLocalOnFailure
+
+        var remoteUrl = localFileStreamServer.lanStreamUrlForLocalFile(
+                    fileUrl, host)
+        if (!remoteUrl || remoteUrl.length === 0) {
+            failPendingAviCast(
+                        localFileStreamServer.lastError.length > 0
+                        ? localFileStreamServer.lastError
+                        : qsTr("The prepared AVI could not be exposed to Chromecast."))
+            return
+        }
+
+        castUsesLanBridge = true
+
+        if (mode === "replace") {
+            var requestedVolume = castManager.mediaInfoKnown && !castManager.imageMedia
+                    ? castManager.volumePercent
+                    : playbackVolumePercent
+            resetPendingAviCast()
+            clearUnsupportedCastVideo()
+            playbackError = ""
+            playbackStatus = qsTr("Loading AVI on Chromecast")
+
+            if (!castManager.replaceMediaWithVolume(remoteUrl,
+                                                    contentType,
+                                                    currentMediaTitle,
+                                                    position,
+                                                    requestedVolume)) {
+                rejectUnsupportedCastVideo(currentMediaTitle,
+                                           castManager.lastError)
+            }
+            return
+        }
+
+        resetPendingAviCast()
+        clearUnsupportedCastVideo()
+
+        castLastDeviceName = deviceName
+        castLastHost = host
+        castLastPort = port
+        castRequested = true
+        castResumeLocalAfterDisconnect = false
+        castDisconnectOnly = false
+        castRejoinPending = false
+        castReturnPosition = position
+        playerSuspended = false
+        playbackError = ""
+        playbackStatus = qsTr("Connecting to %1").arg(
+                    deviceName.length > 0 ? deviceName : qsTr("Chromecast"))
+
+        var started = castManager.startCasting(
+                    deviceName,
+                    host,
+                    port,
+                    remoteUrl,
+                    contentType,
+                    currentMediaTitle,
+                    position,
+                    playbackVolumePercent)
+        if (!started) {
+            castRequested = false
+            localFileStreamServer.stopLanSharing()
+            castUsesLanBridge = false
+            playbackError = castManager.lastError
+            playbackStatus = playbackError
+            if (resumeOnFailure
+                    && mediaPlayer.source
+                    && String(mediaPlayer.source).length > 0) {
+                mediaPlayer.play()
+            }
+        }
     }
 
     function castFromMediaPage(kind, deviceName, host, port) {
@@ -563,6 +779,18 @@ ApplicationWindow {
             return false
         }
 
+        if (!picture && isAviVideo(currentMediaTitle, currentMediaUrl)) {
+            var aviStartPosition = playbackPosition()
+            if (aviStartPosition <= 0 && lastKnownPosition > 0) {
+                aviStartPosition = lastKnownPosition
+            }
+            return prepareAviCast("start",
+                                  deviceName,
+                                  cleanHost,
+                                  port > 0 ? port : 8009,
+                                  aviStartPosition)
+        }
+
         var remoteUrl = picture
                 ? castUrlForCurrentPicture(cleanHost)
                 : castUrlForCurrentMedia(cleanHost)
@@ -678,6 +906,19 @@ ApplicationWindow {
         }
 
         clearUnsupportedCastVideo()
+
+        var startPosition = startPositionMs !== undefined && startPositionMs !== null
+                ? Math.max(0, Math.round(startPositionMs))
+                : Math.max(0, lastKnownPosition)
+
+        if (isAviVideo(currentMediaTitle, currentMediaUrl)) {
+            return prepareAviCast("replace",
+                                  castManager.deviceName,
+                                  castManager.host,
+                                  castManager.port,
+                                  startPosition)
+        }
+
         var remoteUrl = castUrlForCurrentMedia(castManager.host)
         if (!remoteUrl || remoteUrl.length === 0) {
             playbackError = localFileStreamServer.lastError.length > 0
@@ -686,10 +927,6 @@ ApplicationWindow {
             playbackStatus = playbackError
             return false
         }
-
-        var startPosition = startPositionMs !== undefined && startPositionMs !== null
-                ? Math.max(0, Math.round(startPositionMs))
-                : Math.max(0, lastKnownPosition)
 
         if (mediaPlayer.playbackState === MediaPlayer.PlayingState) {
             mediaPlayer.pause()
@@ -972,6 +1209,11 @@ ApplicationWindow {
     }
 
     function leavePlayerView() {
+        if (aviCastPending) {
+            castMediaPreparer.cancel()
+            resetPendingAviCast()
+        }
+
         if (videoCastActive) {
             savePlaybackPosition(false)
             return
@@ -1931,6 +2173,13 @@ ApplicationWindow {
             return
         }
 
+        if (aviCastPending
+                && aviCastPendingSourceKey.length > 0
+                && aviCastPendingSourceKey !== cleanSourceUrl) {
+            castMediaPreparer.cancel()
+            resetPendingAviCast()
+        }
+
         var resume = 0
         if (resumePosition !== undefined && resumePosition !== null) {
             resume = Math.max(0, resumePosition)
@@ -2239,6 +2488,29 @@ ApplicationWindow {
                 playbackStatus = ""
             }
             break
+        }
+    }
+
+    Connections {
+        target: castMediaPreparer
+
+        onReady: {
+            appWindow.completePreparedAviCast(sourceKey, fileUrl, contentType)
+        }
+
+        onTranscodingStarted: {
+            if (appWindow.aviCastPending
+                    && sourceKey === appWindow.aviCastPendingSourceKey) {
+                appWindow.playbackError = ""
+                appWindow.playbackStatus = qsTr("Transcoding AVI for Chromecast")
+            }
+        }
+
+        onFailed: {
+            if (appWindow.aviCastPending
+                    && sourceKey === appWindow.aviCastPendingSourceKey) {
+                appWindow.failPendingAviCast(message)
+            }
         }
     }
 

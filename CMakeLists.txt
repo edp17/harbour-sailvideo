@@ -13,6 +13,7 @@ find_package(Qt5 COMPONENTS Core Gui Qml Quick Multimedia Network Concurrent REQ
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SAILFISHAPP REQUIRED sailfishapp)
 pkg_check_modules(SAILFISHSECRETS REQUIRED sailfishsecrets)
+pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0)
 
 option(SAILVIDEO_BUNDLE_LIBSMB2 "Build the app-private bundled libsmb2 from third_party/libsmb2" ON)
 option(SAILVIDEO_ALLOW_MISSING_LIBSMB2 "Allow building without bundled libsmb2 source; NAS/SMB pages will be disabled at runtime" OFF)
@@ -68,6 +69,8 @@ add_executable(harbour-sailvideo
     src/cast/castdevicemodel.h
     src/cast/castmanager.cpp
     src/cast/castmanager.h
+    src/cast/castmediapreparer.cpp
+    src/cast/castmediapreparer.h
     src/media/playbackhistorymodel.cpp
     src/media/playbackhistorymodel.h
     src/media/localvideomodel.cpp
@@ -98,11 +101,13 @@ target_include_directories(harbour-sailvideo PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${SAILFISHAPP_INCLUDE_DIRS}
     ${SAILFISHSECRETS_INCLUDE_DIRS}
+    ${GSTREAMER_INCLUDE_DIRS}
 )
 
 target_compile_options(harbour-sailvideo PRIVATE
     ${SAILFISHAPP_CFLAGS_OTHER}
     ${SAILFISHSECRETS_CFLAGS_OTHER}
+    ${GSTREAMER_CFLAGS_OTHER}
 )
 
 target_compile_definitions(harbour-sailvideo PRIVATE
@@ -118,6 +123,7 @@ endif()
 link_directories(
     ${SAILFISHAPP_LIBRARY_DIRS}
     ${SAILFISHSECRETS_LIBRARY_DIRS}
+    ${GSTREAMER_LIBRARY_DIRS}
 )
 
 target_link_libraries(harbour-sailvideo
@@ -130,6 +136,7 @@ target_link_libraries(harbour-sailvideo
     Qt5::Concurrent
     ${SAILFISHAPP_LIBRARIES}
     ${SAILFISHSECRETS_LIBRARIES}
+    ${GSTREAMER_LIBRARIES}
 )
 
 install(TARGETS harbour-sailvideo

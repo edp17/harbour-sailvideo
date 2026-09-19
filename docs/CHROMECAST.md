@@ -103,6 +103,39 @@ Manual Previous/Next during Cast can use SailVideo's unified folder-media queue,
 allowing picture-to-video and video-to-picture transitions without returning to
 the NAS browser.
 
+## AVI compatibility preparation
+
+Chromecast does not natively support the AVI container, so SailVideo prepares
+AVI media before sending it to the receiver.
+
+The fast path remains lossless:
+
+```text
+AVI -> avidemux -> H.264 parser + AAC/MP3 parser -> mp4mux -> temporary MP4
+```
+
+If either the video or audio stream cannot be copied into that MP4, SailVideo
+restarts preparation through a generic Sailfish GStreamer decode/transcode path:
+
+```text
+AVI -> uridecodebin -> raw video -> VP8 -> WebM
+                   \-> raw audio -> Vorbis -/
+```
+
+The WebM fallback is intended for codec combinations such as MPEG-4 Part 2
+(Xvid/DivX-class) video with AC-3 audio. It uses the standard Sailfish
+GStreamer/libav decoder stack, VP8 from libvpx and Vorbis audio encoding. No
+change is made to normal QtMultimedia playback on the phone.
+
+The transcoding path is software based. It can take noticeably longer than the
+lossless remux path, uses more CPU/battery and needs temporary free storage. To
+keep CPU demand reasonable, video above 1280x720 is capped at 720p for this
+fallback.
+
+The resulting MP4 or WebM file is exposed through SailVideo's existing LAN HTTP
+Range bridge and only then loaded on Chromecast, so an unsupported or failed AVI
+preparation does not replace valid media already playing on the receiver.
+
 ## Unsupported MOV files
 
 SailVideo does not transcode QuickTime/MOV for Chromecast.

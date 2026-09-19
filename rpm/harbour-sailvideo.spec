@@ -1,6 +1,6 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
-Version:    1.1.0.11
+Version:    1.1.0.12
 Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
@@ -16,11 +16,15 @@ BuildRequires: pkgconfig(Qt5Network)
 BuildRequires: pkgconfig(Qt5Concurrent)
 BuildRequires: pkgconfig(sailfishapp)
 BuildRequires: pkgconfig(sailfishsecrets)
+BuildRequires: pkgconfig(gstreamer-1.0)
 
 Requires: sailfishsilica-qt5
 Requires: sailfish-components-pickers-qt5
 Requires: qt5-qtdeclarative-import-multimedia
 Requires: nemo-qml-plugin-thumbnailer-qt5
+Requires: gstreamer1.0-plugins-good
+Requires: gstreamer1.0-plugins-bad
+Requires: gstreamer1.0-libav
 
 %description
 SailVideo is a native Sailfish OS video player designed for local files,
@@ -57,6 +61,14 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Sat Sep 19 2026 edp17 <edp17@pm.me> - 1.1.0.12-1
+- Add Cast-only AVI compatibility preparation using GStreamer
+- Remux H.264 AVI with AAC or MP3 audio into MP4 without re-encoding
+- Fall back to VP8/Vorbis WebM transcoding for other decodable AVI codec combinations
+- Support MPEG-4 Part 2 + AC-3 AVI through the Sailfish GStreamer/libav stack
+- Reuse the existing local/SMB/URL playback source and Chromecast LAN Range bridge
+- Keep normal QtMultimedia phone playback unchanged
+
 * Sat Sep 19 2026 edp17 <edp17@pm.me> - 1.1.0.11-1
 - Finalise the tested Chromecast hotfix as the polished SailVideo 1.1.0.11 release
 - Fix Chromecast discovery on fresh installations with no remembered receiver

@@ -2,7 +2,7 @@
 
 SailVideo is a native Sailfish OS media player for local, web and home-network media.
 
-**Current package version:** 1.1.0.11  
+**Current package version:** 1.1.0.12  
 **Release line:** SailVideo 1.1
 
 ## Features
@@ -23,6 +23,7 @@ SailVideo is a native Sailfish OS media player for local, web and home-network m
 - Video and picture casting directly from the Player and Picture Viewer pages.
 - Remote Cast play/pause, seek, skip, previous/next, mute, stop/continue and disconnect.
 - Rejoin of an active Cast receiver session where the source remains reachable.
+- AVI casting with lossless H.264/AAC/MP3 remuxing and VP8/Vorbis WebM transcode fallback.
 
 ## Playback architecture
 
@@ -136,7 +137,7 @@ Bundled libsmb2 is licensed under LGPL-2.1-or-later. See:
 
 The repository also retains BSD 3-Clause licence material and a reuse ledger for
 LLs Video Player. No LLs Video Player source code has been incorporated through
-SailVideo 1.1.0.11. See:
+SailVideo 1.1.0.12. See:
 
 - `LICENSES/BSD-3-Clause-LLs.txt`
 - `THIRD_PARTY_NOTICES.md`

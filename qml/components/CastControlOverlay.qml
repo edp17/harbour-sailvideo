@@ -79,6 +79,7 @@ Rectangle {
                 visible: root.activeMatchesPage && !root.pageIsPicture
                 text: castManager.mediaStopped ? qsTr("Continue") : qsTr("Stop")
                 enabled: castManager.connected
+                         && !appWindow.aviCastProgressiveSession
                          && (castManager.mediaStopped || castManager.casting)
                 onClicked: {
                     if (castManager.mediaStopped) castManager.continueMedia()

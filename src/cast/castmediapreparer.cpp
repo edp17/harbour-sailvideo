@@ -357,10 +357,16 @@ bool CastMediaPreparer::configureOutput(PreparationMode mode,
 
     if (mode == RemuxMp4Mode) {
         g_object_set(G_OBJECT(m_mux), "faststart", TRUE, nullptr);
-    } else if (g_object_class_find_property(G_OBJECT_GET_CLASS(m_mux), "streamable")) {
-        // A streamable WebM header does not depend on an end-of-file index or
-        // final duration, allowing Chromecast to start before transcoding ends.
-        g_object_set(G_OBJECT(m_mux), "streamable", TRUE, nullptr);
+    } else {
+        // Keep writing clusters progressively, but allow webmmux to finalise
+        // duration/cues at EOS. The completed file is then re-exposed through
+        // SailVideo's normal Range bridge so Chromecast can seek it.
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(m_mux), "streamable")) {
+            g_object_set(G_OBJECT(m_mux), "streamable", FALSE, nullptr);
+        }
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(m_mux), "offset-to-zero")) {
+            g_object_set(G_OBJECT(m_mux), "offset-to-zero", TRUE, nullptr);
+        }
     }
 
     const QByteArray outputPath = m_partPath.toUtf8();
@@ -763,6 +769,15 @@ bool CastMediaPreparer::linkDecodedVideoPad(GstPad *pad)
     if (g_object_class_find_property(G_OBJECT_GET_CLASS(encoder), "cpu-used")) {
         g_object_set(G_OBJECT(encoder), "cpu-used", 8, nullptr);
     }
+    if (g_object_class_find_property(G_OBJECT_GET_CLASS(encoder), "lag-in-frames")) {
+        g_object_set(G_OBJECT(encoder), "lag-in-frames", guint(0), nullptr);
+    }
+    if (g_object_class_find_property(G_OBJECT_GET_CLASS(encoder), "keyframe-max-dist")) {
+        g_object_set(G_OBJECT(encoder), "keyframe-max-dist", 50, nullptr);
+    }
+    if (g_object_class_find_property(G_OBJECT_GET_CLASS(encoder), "threads")) {
+        g_object_set(G_OBJECT(encoder), "threads", guint(4), nullptr);
+    }
 
     gst_bin_add_many(GST_BIN(m_pipeline),
                      queue,
@@ -974,7 +989,10 @@ void CastMediaPreparer::pollBus()
             emit transcodeProgress(m_sourceKey, bytes);
         }
 
-        const qint64 StartBufferBytes = 2 * 1024 * 1024;
+        // The Xperia 10 III test pipeline produced data comfortably faster
+        // than playback. One MiB gets the receiver probing sooner while still
+        // leaving a useful initial buffer.
+        const qint64 StartBufferBytes = 1 * 1024 * 1024;
         if (!m_streamReadyEmitted
                 && m_videoLinked.load()
                 && bytes >= StartBufferBytes) {

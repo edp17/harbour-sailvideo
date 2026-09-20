@@ -153,6 +153,7 @@ ApplicationWindow {
     property bool aviCastResumeLocalOnFailure: false
     property bool aviCastTranscoding: false
     property bool aviCastStreamingStarted: false
+    property bool aviCastProgressiveSession: false
     property string aviCastGrowingFileUrl: ""
 
     property bool castMode: castRequested
@@ -494,6 +495,7 @@ ApplicationWindow {
         }
         castMediaPreparer.clearPreparedCache()
         aviCastStreamingStarted = false
+        aviCastProgressiveSession = false
         aviCastGrowingFileUrl = ""
         aviCastTranscoding = false
         if (aviCastPending) {
@@ -621,6 +623,7 @@ ApplicationWindow {
 
         castUsesLanBridge = true
         aviCastStreamingStarted = true
+        aviCastProgressiveSession = true
         aviCastGrowingFileUrl = fileUrl
 
         // A growing WebM has no final index/duration yet, so the first
@@ -686,6 +689,53 @@ ApplicationWindow {
         }
     }
 
+    function promoteCompletedAviCast(sourceKey, fileUrl, contentType) {
+        if (!aviCastPending
+                || !aviCastStreamingStarted
+                || sourceKey !== aviCastPendingSourceKey
+                || sourceKey !== currentMediaUrl) {
+            return false
+        }
+
+        localFileStreamServer.markGrowingLocalFileComplete(fileUrl)
+
+        var host = cleanedValue(castManager.host)
+        if (host.length === 0) {
+            host = aviCastPendingHost
+        }
+
+        var remoteUrl = localFileStreamServer.lanStreamUrlForLocalFile(
+                    fileUrl, host)
+        if (!remoteUrl || remoteUrl.length === 0) {
+            resetPendingAviCast()
+            playbackStatus = qsTr("AVI prepared; continuing current Cast stream")
+            return false
+        }
+
+        var resumePosition = Math.max(0, castManager.position)
+        var requestedVolume = castManager.mediaInfoKnown && !castManager.imageMedia
+                ? castManager.volumePercent
+                : playbackVolumePercent
+
+        if (!castManager.replaceMediaWithVolume(remoteUrl,
+                                                contentType,
+                                                currentMediaTitle,
+                                                resumePosition,
+                                                requestedVolume)) {
+            resetPendingAviCast()
+            playbackStatus = qsTr("AVI prepared; continuing current Cast stream")
+            return false
+        }
+
+        aviCastProgressiveSession = false
+        aviCastStreamingStarted = false
+        aviCastGrowingFileUrl = fileUrl
+        resetPendingAviCast()
+        playbackError = ""
+        playbackStatus = qsTr("AVI prepared; enabling seek on Chromecast")
+        return true
+    }
+
     function completePreparedAviCast(sourceKey, fileUrl, contentType) {
         if (!aviCastPending
                 || sourceKey !== aviCastPendingSourceKey
@@ -694,9 +744,7 @@ ApplicationWindow {
         }
 
         if (aviCastStreamingStarted) {
-            localFileStreamServer.markGrowingLocalFileComplete(fileUrl)
-            resetPendingAviCast()
-            updatePlaybackStatus()
+            promoteCompletedAviCast(sourceKey, fileUrl, contentType)
             return
         }
 
@@ -1319,6 +1367,9 @@ ApplicationWindow {
             localFileStreamServer.stopLanSharing()
             castUsesLanBridge = false
         }
+        if (aviCastProgressiveSession || aviCastGrowingFileUrl.length > 0) {
+            releasePreparedAviCache()
+        }
         playbackError = castManager.lastError
         playbackStatus = playbackError
         lastKnownPosition = failedPosition
@@ -1374,6 +1425,11 @@ ApplicationWindow {
         }
 
         if (videoCastActive) {
+            if (aviCastProgressiveSession) {
+                playbackStatus = qsTr("AVI is still being prepared. Seeking will be enabled automatically when preparation finishes.")
+                return
+            }
+
             userSeekPending = true
             playbackStatus = qsTr("Seeking on %1").arg(
                         castManager.deviceName.length > 0
@@ -1403,6 +1459,11 @@ ApplicationWindow {
         }
 
         if (videoCastActive) {
+            if (aviCastProgressiveSession) {
+                playbackStatus = qsTr("AVI is still being prepared. Restart will be available when preparation finishes.")
+                return
+            }
+
             if (castManager.mediaStopped) {
                 castManager.seek(0)
                 castManager.continueMedia()
@@ -2298,6 +2359,12 @@ ApplicationWindow {
             return
         }
 
+        if ((aviCastProgressiveSession || aviCastGrowingFileUrl.length > 0)
+                && currentMediaUrl.length > 0
+                && currentMediaUrl !== cleanSourceUrl) {
+            releasePreparedAviCache()
+        }
+
         if (aviCastPending
                 && aviCastPendingSourceKey.length > 0
                 && aviCastPendingSourceKey !== cleanSourceUrl) {
@@ -2751,6 +2818,8 @@ ApplicationWindow {
             if (castActivePicture) {
                 return
             }
+            var clearPreparedAvi = aviCastProgressiveSession
+                    || aviCastGrowingFileUrl.length > 0
             playbackCompleted = true
             lastKnownPosition = 0
             savePlaybackPosition(true)
@@ -2758,6 +2827,9 @@ ApplicationWindow {
                         castManager.deviceName.length > 0
                         ? castManager.deviceName
                         : qsTr("Chromecast"))
+            if (clearPreparedAvi) {
+                releasePreparedAviCache()
+            }
         }
     }
 

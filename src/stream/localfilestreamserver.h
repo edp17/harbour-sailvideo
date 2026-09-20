@@ -13,6 +13,7 @@
 #include <QObject>
 #include <QString>
 #include <QTcpServer>
+#include <QTimer>
 #include <QUrl>
 
 #include <memory>
@@ -54,6 +55,11 @@ public:
                                             const QString &fileName);
     Q_INVOKABLE QString lanStreamUrlForLocalFile(const QString &urlOrPath,
                                                       const QString &peerHost);
+    Q_INVOKABLE QString lanStreamUrlForGrowingLocalFile(const QString &urlOrPath,
+                                                        const QString &peerHost,
+                                                        const QString &mimeType);
+    Q_INVOKABLE void markGrowingLocalFileComplete(const QString &urlOrPath);
+    Q_INVOKABLE void abortGrowingLocalFile(const QString &urlOrPath);
     Q_INVOKABLE QString lanStreamUrlForSmbFile(const QString &host,
                                                int port,
                                                const QString &share,
@@ -79,11 +85,13 @@ private slots:
     void handleNewConnection();
     void readClientRequest();
     void pumpClientData();
+    void pumpGrowingTransfers();
     void cleanupClient();
 
 private:
     enum class StreamType {
         LocalFile,
+        GrowingLocalFile,
         SmbFile
     };
 
@@ -93,6 +101,8 @@ private:
         QString fileName;
         QString mimeType;
         qint64 size = 0;
+        bool growingComplete = false;
+        bool growingFailed = false;
 
         QString smbHost;
         int smbPort = 445;
@@ -109,6 +119,8 @@ private:
         std::unique_ptr<SmbFileReader> smbReader;
         qint64 remaining = 0;
         qint64 nextOffset = 0;
+        QString token;
+        bool growing = false;
     };
 
     bool ensureListening();
@@ -138,6 +150,10 @@ private:
                        bool partial,
                        bool headOnly,
                        bool allowSmbRetry = true);
+    void startGrowingTransfer(QTcpSocket *socket,
+                              const QString &token,
+                              const StreamEntry &entry,
+                              bool headOnly);
     void pumpClientData(QTcpSocket *socket);
     void closeTransfer(QTcpSocket *socket);
 
@@ -151,6 +167,7 @@ private:
     QHash<QString, StreamEntry> m_entries;
     QHash<QTcpSocket *, QByteArray> m_pendingRequests;
     QHash<QTcpSocket *, Transfer *> m_transfers;
+    QTimer m_growingPumpTimer;
 };
 
 #endif // LOCALFILESTREAMSERVER_H

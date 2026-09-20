@@ -249,6 +249,8 @@ bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
     m_videoLinked.store(false);
     m_audioLinked.store(false);
     m_fallbackScheduled.store(false);
+    m_streamReadyEmitted = false;
+    m_lastProgressBytes = 0;
     m_mode.store(RemuxMp4Mode);
     setLastError(QString());
     setBusy(true);
@@ -276,6 +278,8 @@ void CastMediaPreparer::cancel()
     setBusy(false);
     m_mode.store(NoPreparationMode);
     m_fallbackScheduled.store(false);
+    m_streamReadyEmitted = false;
+    m_lastProgressBytes = 0;
     teardownPipeline();
 
     if (!m_partPath.isEmpty()) {
@@ -288,6 +292,29 @@ void CastMediaPreparer::cancel()
     m_partPath.clear();
     m_videoLinked.store(false);
     m_audioLinked.store(false);
+}
+
+void CastMediaPreparer::clearPreparedCache()
+{
+    if (m_busy.load() || m_pipeline) {
+        cancel();
+    }
+
+    m_preparedFiles.clear();
+
+    QDir directory(cacheDirectory());
+    if (!directory.exists()) {
+        return;
+    }
+
+    const QStringList filters = QStringList()
+            << QStringLiteral("*.mp4")
+            << QStringLiteral("*.webm")
+            << QStringLiteral("*.part");
+    const QStringList files = directory.entryList(filters, QDir::Files);
+    for (const QString &fileName : files) {
+        directory.remove(fileName);
+    }
 }
 
 bool CastMediaPreparer::configureOutput(PreparationMode mode,
@@ -304,9 +331,16 @@ bool CastMediaPreparer::configureOutput(PreparationMode mode,
             ? QStringLiteral("webm")
             : QStringLiteral("mp4");
     m_outputPath = outputPathForKey(m_sourceKey, suffix);
-    m_partPath = m_outputPath + QStringLiteral(".part");
+    // WebM transcoding is exposed to Chromecast while it is still growing,
+    // so keep a stable pathname for the whole session. Lossless MP4 remuxing
+    // retains the old .part -> final atomic rename behaviour.
+    m_partPath = mode == TranscodeWebmMode
+            ? m_outputPath
+            : m_outputPath + QStringLiteral(".part");
     QFile::remove(m_outputPath);
-    QFile::remove(m_partPath);
+    if (m_partPath != m_outputPath) {
+        QFile::remove(m_partPath);
+    }
 
     m_mux = gst_element_factory_make(
                 mode == TranscodeWebmMode ? "webmmux" : "mp4mux",
@@ -323,6 +357,10 @@ bool CastMediaPreparer::configureOutput(PreparationMode mode,
 
     if (mode == RemuxMp4Mode) {
         g_object_set(G_OBJECT(m_mux), "faststart", TRUE, nullptr);
+    } else if (g_object_class_find_property(G_OBJECT_GET_CLASS(m_mux), "streamable")) {
+        // A streamable WebM header does not depend on an end-of-file index or
+        // final duration, allowing Chromecast to start before transcoding ends.
+        g_object_set(G_OBJECT(m_mux), "streamable", TRUE, nullptr);
     }
 
     const QByteArray outputPath = m_partPath.toUtf8();
@@ -902,6 +940,8 @@ void CastMediaPreparer::startTranscodeFallback(const QString &reason)
     m_videoLinked.store(false);
     m_audioLinked.store(false);
     m_fallbackScheduled.store(false);
+    m_streamReadyEmitted = false;
+    m_lastProgressBytes = 0;
     m_mode.store(TranscodeWebmMode);
 
     QString error;
@@ -923,6 +963,29 @@ void CastMediaPreparer::pollBus()
     // is waiting for the Qt event loop. Let the fallback slot tear it down.
     if (m_mode.load() == RemuxMp4Mode && m_fallbackScheduled.load()) {
         return;
+    }
+
+    if (m_mode.load() == TranscodeWebmMode && !m_partPath.isEmpty()) {
+        const QFileInfo growingFile(m_partPath);
+        const qint64 bytes = growingFile.exists() ? growingFile.size() : 0;
+
+        if (bytes >= m_lastProgressBytes + (1024 * 1024)) {
+            m_lastProgressBytes = bytes;
+            emit transcodeProgress(m_sourceKey, bytes);
+        }
+
+        const qint64 StartBufferBytes = 2 * 1024 * 1024;
+        if (!m_streamReadyEmitted
+                && m_videoLinked.load()
+                && bytes >= StartBufferBytes) {
+            m_streamReadyEmitted = true;
+            const QString fileUrl = QUrl::fromLocalFile(m_partPath).toString();
+            qInfo() << "SailVideo Cast transcode: progressive WebM buffer ready"
+                    << bytes << "bytes";
+            emit transcodeStreamReady(m_sourceKey,
+                                      fileUrl,
+                                      QStringLiteral("video/webm"));
+        }
     }
 
     for (;;) {
@@ -1007,10 +1070,12 @@ void CastMediaPreparer::finishSuccess()
         return;
     }
 
-    QFile::remove(outputPath);
-    if (!QFile::rename(partPath, outputPath)) {
-        finishFailure(tr("Could not finalise the temporary Chromecast media file."));
-        return;
+    if (partPath != outputPath) {
+        QFile::remove(outputPath);
+        if (!QFile::rename(partPath, outputPath)) {
+            finishFailure(tr("Could not finalise the temporary Chromecast media file."));
+            return;
+        }
     }
 
     m_preparedFiles.insert(sourceKey, outputPath);

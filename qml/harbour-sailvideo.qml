@@ -151,6 +151,9 @@ ApplicationWindow {
     property int aviCastPendingPort: 8009
     property int aviCastPendingPosition: 0
     property bool aviCastResumeLocalOnFailure: false
+    property bool aviCastTranscoding: false
+    property bool aviCastStreamingStarted: false
+    property string aviCastGrowingFileUrl: ""
 
     property bool castMode: castRequested
                             || castManager.connected
@@ -479,6 +482,23 @@ ApplicationWindow {
         aviCastPendingPort = 8009
         aviCastPendingPosition = 0
         aviCastResumeLocalOnFailure = false
+        aviCastTranscoding = false
+    }
+
+    function releasePreparedAviCache() {
+        if (aviCastGrowingFileUrl.length > 0) {
+            localFileStreamServer.abortGrowingLocalFile(aviCastGrowingFileUrl)
+        }
+        if (castMediaPreparer.busy) {
+            castMediaPreparer.cancel()
+        }
+        castMediaPreparer.clearPreparedCache()
+        aviCastStreamingStarted = false
+        aviCastGrowingFileUrl = ""
+        aviCastTranscoding = false
+        if (aviCastPending) {
+            resetPendingAviCast()
+        }
     }
 
     function failPendingAviCast(message) {
@@ -513,7 +533,9 @@ ApplicationWindow {
                 aviCastPendingPosition = startPosition !== undefined && startPosition !== null
                         ? Math.max(0, Math.round(startPosition))
                         : aviCastPendingPosition
-                playbackStatus = qsTr("Preparing AVI for Chromecast")
+                playbackStatus = aviCastTranscoding
+                        ? qsTr("Transcoding AVI for Chromecast")
+                        : qsTr("Preparing AVI for Chromecast")
                 return true
             }
             playbackError = qsTr("Another AVI file is already being prepared for Chromecast.")
@@ -554,6 +576,9 @@ ApplicationWindow {
         aviCastPendingPort = port > 0 ? port : 8009
         aviCastPendingPosition = position
         aviCastResumeLocalOnFailure = mode === "start" && wasPlaying
+        aviCastTranscoding = false
+        aviCastStreamingStarted = false
+        aviCastGrowingFileUrl = ""
 
         clearUnsupportedCastVideo()
         playbackError = ""
@@ -570,10 +595,108 @@ ApplicationWindow {
         return true
     }
 
+    function startStreamingPreparedAviCast(sourceKey, fileUrl, contentType) {
+        if (!aviCastPending
+                || aviCastStreamingStarted
+                || sourceKey !== aviCastPendingSourceKey
+                || sourceKey !== currentMediaUrl) {
+            return
+        }
+
+        var mode = aviCastPendingMode
+        var deviceName = aviCastPendingDeviceName
+        var host = aviCastPendingHost
+        var port = aviCastPendingPort
+        var resumeOnFailure = aviCastResumeLocalOnFailure
+
+        var remoteUrl = localFileStreamServer.lanStreamUrlForGrowingLocalFile(
+                    fileUrl, host, contentType)
+        if (!remoteUrl || remoteUrl.length === 0) {
+            failPendingAviCast(
+                        localFileStreamServer.lastError.length > 0
+                        ? localFileStreamServer.lastError
+                        : qsTr("The transcoded AVI buffer could not be exposed to Chromecast."))
+            return
+        }
+
+        castUsesLanBridge = true
+        aviCastStreamingStarted = true
+        aviCastGrowingFileUrl = fileUrl
+
+        // A growing WebM has no final index/duration yet, so the first
+        // progressive checkpoint starts at the beginning.
+        var streamPosition = 0
+
+        if (mode === "replace") {
+            var requestedVolume = castManager.mediaInfoKnown && !castManager.imageMedia
+                    ? castManager.volumePercent
+                    : playbackVolumePercent
+            clearUnsupportedCastVideo()
+            playbackError = ""
+            playbackStatus = qsTr("Starting transcoded AVI on Chromecast")
+
+            if (!castManager.replaceMediaWithVolume(remoteUrl,
+                                                    contentType,
+                                                    currentMediaTitle,
+                                                    streamPosition,
+                                                    requestedVolume)) {
+                aviCastStreamingStarted = false
+                localFileStreamServer.abortGrowingLocalFile(fileUrl)
+                failPendingAviCast(castManager.lastError)
+            }
+            return
+        }
+
+        clearUnsupportedCastVideo()
+        castLastDeviceName = deviceName
+        castLastHost = host
+        castLastPort = port
+        castRequested = true
+        castResumeLocalAfterDisconnect = false
+        castDisconnectOnly = false
+        castRejoinPending = false
+        castReturnPosition = streamPosition
+        playerSuspended = false
+        playbackError = ""
+        playbackStatus = qsTr("Connecting to %1").arg(
+                    deviceName.length > 0 ? deviceName : qsTr("Chromecast"))
+
+        var started = castManager.startCasting(
+                    deviceName,
+                    host,
+                    port,
+                    remoteUrl,
+                    contentType,
+                    currentMediaTitle,
+                    streamPosition,
+                    playbackVolumePercent)
+        if (!started) {
+            castRequested = false
+            localFileStreamServer.abortGrowingLocalFile(fileUrl)
+            localFileStreamServer.stopLanSharing()
+            castUsesLanBridge = false
+            aviCastStreamingStarted = false
+            playbackError = castManager.lastError
+            playbackStatus = playbackError
+            if (resumeOnFailure
+                    && mediaPlayer.source
+                    && String(mediaPlayer.source).length > 0) {
+                mediaPlayer.play()
+            }
+        }
+    }
+
     function completePreparedAviCast(sourceKey, fileUrl, contentType) {
         if (!aviCastPending
                 || sourceKey !== aviCastPendingSourceKey
                 || sourceKey !== currentMediaUrl) {
+            return
+        }
+
+        if (aviCastStreamingStarted) {
+            localFileStreamServer.markGrowingLocalFileComplete(fileUrl)
+            resetPendingAviCast()
+            updatePlaybackStatus()
             return
         }
 
@@ -1018,6 +1141,7 @@ ApplicationWindow {
             localFileStreamServer.stopLanSharing()
             castUsesLanBridge = false
         }
+        releasePreparedAviCache()
         appSettings.clearDetachedCastSession()
         playbackStatus = qsTr("Chromecast disconnected")
     }
@@ -1034,6 +1158,7 @@ ApplicationWindow {
             localFileStreamServer.stopLanSharing()
             castUsesLanBridge = false
         }
+        releasePreparedAviCache()
 
         if (!hasMedia) {
             return
@@ -1209,7 +1334,7 @@ ApplicationWindow {
     }
 
     function leavePlayerView() {
-        if (aviCastPending) {
+        if (aviCastPending && !aviCastStreamingStarted) {
             castMediaPreparer.cancel()
             resetPendingAviCast()
         }
@@ -2501,15 +2626,42 @@ ApplicationWindow {
         onTranscodingStarted: {
             if (appWindow.aviCastPending
                     && sourceKey === appWindow.aviCastPendingSourceKey) {
+                appWindow.aviCastTranscoding = true
                 appWindow.playbackError = ""
                 appWindow.playbackStatus = qsTr("Transcoding AVI for Chromecast")
             }
         }
 
+        onTranscodeProgress: {
+            if (appWindow.aviCastPending
+                    && !appWindow.aviCastStreamingStarted
+                    && sourceKey === appWindow.aviCastPendingSourceKey) {
+                appWindow.playbackStatus = qsTr("Transcoding AVI for Chromecast (%1 buffered)")
+                        .arg(appWindow.formatBytes(bytesWritten))
+            }
+        }
+
+        onTranscodeStreamReady: {
+            appWindow.startStreamingPreparedAviCast(sourceKey,
+                                                    fileUrl,
+                                                    contentType)
+        }
+
         onFailed: {
             if (appWindow.aviCastPending
                     && sourceKey === appWindow.aviCastPendingSourceKey) {
+                if (appWindow.aviCastStreamingStarted
+                        && appWindow.aviCastGrowingFileUrl.length > 0) {
+                    localFileStreamServer.abortGrowingLocalFile(
+                                appWindow.aviCastGrowingFileUrl)
+                    if (castManager.connected || castManager.casting) {
+                        castManager.disconnectAndStopReceiver()
+                    }
+                }
                 appWindow.failPendingAviCast(message)
+                castMediaPreparer.clearPreparedCache()
+                appWindow.aviCastStreamingStarted = false
+                appWindow.aviCastGrowingFileUrl = ""
             }
         }
     }

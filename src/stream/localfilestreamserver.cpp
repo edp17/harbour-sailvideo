@@ -136,6 +136,11 @@ LocalFileStreamServer::LocalFileStreamServer(QObject *parent)
             this, SLOT(handleNewConnection()));
     connect(&m_lanServer, SIGNAL(newConnection()),
             this, SLOT(handleNewConnection()));
+
+    m_growingPumpTimer.setInterval(100);
+    m_growingPumpTimer.setSingleShot(false);
+    connect(&m_growingPumpTimer, SIGNAL(timeout()),
+            this, SLOT(pumpGrowingTransfers()));
 }
 
 LocalFileStreamServer::~LocalFileStreamServer()
@@ -308,6 +313,97 @@ QString LocalFileStreamServer::lanStreamUrlForLocalFile(const QString &urlOrPath
             : lanUrlForLoopbackUrl(loopbackUrl, peerHost);
 }
 
+QString LocalFileStreamServer::lanStreamUrlForGrowingLocalFile(
+        const QString &urlOrPath,
+        const QString &peerHost,
+        const QString &mimeType)
+{
+    const QString path = localFilePath(urlOrPath);
+    if (path.isEmpty()) {
+        setLastError(tr("Only local growing files can be exposed to Chromecast."));
+        return QString();
+    }
+
+    const QFileInfo info(path);
+    if (!info.exists() || !info.isFile() || !info.isReadable()) {
+        setLastError(tr("The transcoded AVI buffer is not readable."));
+        return QString();
+    }
+
+    if (!ensureLanListening(peerHost)) {
+        return QString();
+    }
+
+    const QHostAddress peer(peerHost.trimmed());
+    const QHostAddress localAddress = lanAddressForPeer(peer);
+    if (localAddress.isNull()) {
+        setLastError(tr("Could not determine the phone's Wi-Fi address for Chromecast."));
+        return QString();
+    }
+
+    StreamEntry entry;
+    entry.type = StreamType::GrowingLocalFile;
+    entry.filePath = info.absoluteFilePath();
+    entry.fileName = info.fileName();
+    entry.mimeType = mimeType.trimmed().isEmpty()
+            ? QStringLiteral("video/webm")
+            : mimeType.trimmed();
+    entry.size = info.size();
+
+    const QString token = createToken();
+    m_entries.insert(token, entry);
+
+    QUrl lanUrl;
+    lanUrl.setScheme(QStringLiteral("http"));
+    lanUrl.setHost(localAddress.toString());
+    lanUrl.setPort(int(m_lanServer.serverPort()));
+    lanUrl.setPath(QStringLiteral("/") + token + QStringLiteral("/")
+                   + entry.fileName);
+
+    setLastError(QString());
+    qInfo() << "SailVideo Cast bridge: progressive growing-file URL ready;"
+            << entry.size << "bytes buffered";
+    return lanUrl.toString();
+}
+
+void LocalFileStreamServer::markGrowingLocalFileComplete(const QString &urlOrPath)
+{
+    const QString path = localFilePath(urlOrPath);
+    if (path.isEmpty()) {
+        return;
+    }
+
+    const qint64 finalSize = QFileInfo(path).size();
+    for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
+        if (it->type == StreamType::GrowingLocalFile
+                && it->filePath == path) {
+            it->size = finalSize;
+            it->growingComplete = true;
+        }
+    }
+
+    qInfo() << "SailVideo Cast bridge: growing WebM complete;"
+            << finalSize << "bytes";
+    pumpGrowingTransfers();
+}
+
+void LocalFileStreamServer::abortGrowingLocalFile(const QString &urlOrPath)
+{
+    const QString path = localFilePath(urlOrPath);
+    if (path.isEmpty()) {
+        return;
+    }
+
+    for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
+        if (it->type == StreamType::GrowingLocalFile
+                && it->filePath == path) {
+            it->growingFailed = true;
+        }
+    }
+
+    pumpGrowingTransfers();
+}
+
 QString LocalFileStreamServer::lanStreamUrlForSmbFile(const QString &host,
                                                       int port,
                                                       const QString &share,
@@ -477,6 +573,39 @@ void LocalFileStreamServer::pumpClientData(QTcpSocket *socket)
         return;
     }
 
+    if (transfer->growing) {
+        const auto entryIt = m_entries.constFind(transfer->token);
+        if (entryIt == m_entries.constEnd() || entryIt->growingFailed) {
+            closeTransfer(socket);
+            socket->disconnectFromHost();
+            return;
+        }
+
+        const qint64 available = QFileInfo(entryIt->filePath).size();
+        if (transfer->nextOffset < available
+                && socket->bytesToWrite() < MaxBufferedBytes) {
+            const qint64 wanted = qMin(ChunkSize,
+                                       available - transfer->nextOffset);
+            if (transfer->file
+                    && transfer->file->seek(transfer->nextOffset)) {
+                const QByteArray data = transfer->file->read(wanted);
+                if (!data.isEmpty()) {
+                    const qint64 written = socket->write(data);
+                    if (written > 0) {
+                        transfer->nextOffset += written;
+                    }
+                }
+            }
+        }
+
+        if (entryIt->growingComplete
+                && transfer->nextOffset >= QFileInfo(entryIt->filePath).size()) {
+            closeTransfer(socket);
+            socket->disconnectFromHost();
+        }
+        return;
+    }
+
     // Pump at most one chunk per event-loop turn. Synchronous libsmb2 reads
     // must not continuously occupy the same Qt thread that services Cast-V2
     // heartbeat/control traffic.
@@ -518,6 +647,17 @@ void LocalFileStreamServer::pumpClientData(QTcpSocket *socket)
     if (transfer->remaining <= 0) {
         closeTransfer(socket);
         socket->disconnectFromHost();
+    }
+}
+
+void LocalFileStreamServer::pumpGrowingTransfers()
+{
+    const QList<QTcpSocket *> sockets = m_transfers.keys();
+    for (QTcpSocket *socket : sockets) {
+        Transfer *transfer = m_transfers.value(socket, nullptr);
+        if (transfer && transfer->growing) {
+            pumpClientData(socket);
+        }
     }
 }
 
@@ -743,10 +883,35 @@ void LocalFileStreamServer::handleRequest(QTcpSocket *socket, const QByteArray &
         return;
     }
 
-    const StreamEntry entry = m_entries.value(token);
-    if (entry.type == StreamType::LocalFile && !QFileInfo(entry.filePath).isReadable()) {
+    StreamEntry entry = m_entries.value(token);
+    if ((entry.type == StreamType::LocalFile
+         || entry.type == StreamType::GrowingLocalFile)
+            && !QFileInfo(entry.filePath).isReadable()) {
         sendSimpleResponse(socket, 404, reasonPhrase(404));
         return;
+    }
+
+    if (entry.type == StreamType::GrowingLocalFile) {
+        if (entry.growingFailed) {
+            sendSimpleResponse(socket, 500, reasonPhrase(500));
+            return;
+        }
+
+        if (!entry.growingComplete) {
+            if (m_lanClients.contains(socket)) {
+                qInfo() << "SailVideo Cast bridge:" << method
+                        << "progressive WebM; currently"
+                        << QFileInfo(entry.filePath).size() << "bytes";
+            }
+            startGrowingTransfer(socket,
+                                 token,
+                                 entry,
+                                 method == QByteArrayLiteral("HEAD"));
+            return;
+        }
+
+        entry.type = StreamType::LocalFile;
+        entry.size = QFileInfo(entry.filePath).size();
     }
 
     if (entry.type == StreamType::SmbFile && !m_smbBackend) {
@@ -971,6 +1136,50 @@ void LocalFileStreamServer::startTransfer(QTcpSocket *socket,
     pumpClientData(socket);
 }
 
+void LocalFileStreamServer::startGrowingTransfer(QTcpSocket *socket,
+                                                     const QString &token,
+                                                     const StreamEntry &entry,
+                                                     bool headOnly)
+{
+    if (!socket) {
+        return;
+    }
+
+    QByteArray response;
+    response += "HTTP/1.1 200 OK\r\n";
+    response += "Accept-Ranges: none\r\n";
+    response += "Access-Control-Allow-Origin: *\r\n";
+    response += "Content-Type: " + entry.mimeType.toUtf8() + "\r\n";
+    response += "Cache-Control: no-store\r\n";
+    response += "Connection: close\r\n";
+    response += "\r\n";
+    socket->write(response);
+
+    if (headOnly) {
+        socket->disconnectFromHost();
+        return;
+    }
+
+    QFile *file = new QFile(entry.filePath, this);
+    if (!file->open(QIODevice::ReadOnly)) {
+        delete file;
+        socket->disconnectFromHost();
+        return;
+    }
+
+    Transfer *transfer = new Transfer;
+    transfer->file = file;
+    transfer->token = token;
+    transfer->growing = true;
+    transfer->nextOffset = 0;
+    m_transfers.insert(socket, transfer);
+
+    if (!m_growingPumpTimer.isActive()) {
+        m_growingPumpTimer.start();
+    }
+    pumpClientData(socket);
+}
+
 void LocalFileStreamServer::closeTransfer(QTcpSocket *socket)
 {
     Transfer *transfer = m_transfers.take(socket);
@@ -984,6 +1193,18 @@ void LocalFileStreamServer::closeTransfer(QTcpSocket *socket)
     }
     transfer->smbReader.reset();
     delete transfer;
+
+    bool growingTransferLeft = false;
+    const QList<Transfer *> transfers = m_transfers.values();
+    for (Transfer *candidate : transfers) {
+        if (candidate && candidate->growing) {
+            growingTransferLeft = true;
+            break;
+        }
+    }
+    if (!growingTransferLeft) {
+        m_growingPumpTimer.stop();
+    }
 }
 
 void LocalFileStreamServer::setLastResolvedSize(qint64 size)

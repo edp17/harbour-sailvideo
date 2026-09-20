@@ -34,11 +34,16 @@ public:
     Q_INVOKABLE bool prepareAvi(const QString &inputUrl,
                                 const QString &sourceKey);
     Q_INVOKABLE void cancel();
+    Q_INVOKABLE void clearPreparedCache();
 
 signals:
     void busyChanged();
     void lastErrorChanged();
     void transcodingStarted(const QString &sourceKey);
+    void transcodeProgress(const QString &sourceKey, qint64 bytesWritten);
+    void transcodeStreamReady(const QString &sourceKey,
+                              const QString &fileUrl,
+                              const QString &contentType);
     void ready(const QString &sourceKey,
                const QString &fileUrl,
                const QString &contentType);
@@ -99,6 +104,8 @@ private:
     std::atomic<bool> m_audioLinked {false};
     std::atomic<bool> m_fallbackScheduled {false};
     std::atomic<int> m_mode {NoPreparationMode};
+    bool m_streamReadyEmitted = false;
+    qint64 m_lastProgressBytes = 0;
 
     QString m_lastError;
     QHash<QString, QString> m_preparedFiles;

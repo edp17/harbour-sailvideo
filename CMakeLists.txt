@@ -93,6 +93,8 @@ add_executable(harbour-sailvideo
     src/system/systemaudiocontroller.h
     src/stream/localfilestreamserver.cpp
     src/stream/localfilestreamserver.h
+    src/stream/smbstreamsession.cpp
+    src/stream/smbstreamsession.h
     src/stream/urldownloadcache.cpp
     src/stream/urldownloadcache.h
 )

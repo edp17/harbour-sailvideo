@@ -7,8 +7,10 @@
 #ifndef LOCALFILESTREAMSERVER_H
 #define LOCALFILESTREAMSERVER_H
 
+#include <QByteArray>
 #include <QHash>
 #include <QHostAddress>
+#include <QPointer>
 #include <QSet>
 #include <QObject>
 #include <QString>
@@ -20,9 +22,10 @@
 
 class QFile;
 class QTcpSocket;
+class QThread;
 class SmbBackend;
-class SmbFileReader;
-struct SmbTransferWorkerState;
+class SmbStreamSession;
+struct SmbSessionHolder;
 
 class LocalFileStreamServer : public QObject
 {
@@ -88,6 +91,13 @@ private slots:
     void pumpClientData();
     void pumpGrowingTransfers();
     void cleanupClient();
+    void handleSmbRequestReady(quint64 requestId);
+    void handleSmbChunkReady(quint64 requestId,
+                             const QByteArray &data,
+                             bool lastChunk);
+    void handleSmbRequestFailed(quint64 requestId,
+                                const QString &message);
+    void cleanupIdleSmbSessions();
 
 private:
     enum class StreamType {
@@ -117,13 +127,17 @@ private:
 
     struct Transfer {
         QFile *file = nullptr;
-        std::shared_ptr<SmbTransferWorkerState> smbWorker;
         qint64 remaining = 0;
         qint64 nextOffset = 0;
+        qint64 smbStart = 0;
+        qint64 smbEnd = 0;
         quint64 id = 0;
+        quint64 smbRequestId = 0;
         QString token;
         bool growing = false;
-        bool smbCreditPending = false;
+        bool smbPartial = false;
+        bool smbHeadersSent = false;
+        bool smbAckPending = false;
     };
 
     bool ensureListening();
@@ -153,6 +167,11 @@ private:
                                bool partial,
                                bool allowSmbRetry,
                                Transfer *transfer);
+    SmbStreamSession *ensureSmbSession(const QString &token,
+                                       const StreamEntry &entry);
+    void acknowledgeSmbTransfer(Transfer *transfer);
+    void shutdownSmbSession(const QString &token);
+    void shutdownAllSmbSessions();
     void sendSimpleResponse(QTcpSocket *socket,
                             int statusCode,
                             const QByteArray &reason,
@@ -163,6 +182,7 @@ private:
                     qint64 *start,
                     qint64 *end) const;
     void startTransfer(QTcpSocket *socket,
+                       const QString &token,
                        const StreamEntry &entry,
                        qint64 start,
                        qint64 end,
@@ -187,8 +207,11 @@ private:
     QHash<QTcpSocket *, QByteArray> m_pendingRequests;
     QHash<QTcpSocket *, Transfer *> m_transfers;
     QSet<QTcpSocket *> m_smbSizePending;
+    QHash<QString, SmbSessionHolder *> m_smbSessions;
+    QHash<quint64, QPointer<QTcpSocket> > m_smbRequestSockets;
     quint64 m_nextTransferId = 1;
     QTimer m_growingPumpTimer;
+    QTimer m_smbSessionCleanupTimer;
 };
 
 #endif // LOCALFILESTREAMSERVER_H

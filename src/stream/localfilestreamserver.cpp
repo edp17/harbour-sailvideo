@@ -7,6 +7,7 @@
 #include "localfilestreamserver.h"
 
 #include "smb/smbbackend.h"
+#include "stream/smbstreamsession.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -19,7 +20,6 @@
 #include <QNetworkAddressEntry>
 #include <QNetworkInterface>
 #include <QPointer>
-#include <QSemaphore>
 #include <QTcpSocket>
 #include <QThread>
 #include <QTimer>
@@ -27,37 +27,11 @@
 #include <QUuid>
 #include <QtConcurrent>
 
-#include <atomic>
-
-struct SmbTransferWorkerState
-{
-    SmbTransferWorkerState()
-        : startGate(0)
-        , credit(1)
-    {
-    }
-
-    std::atomic<bool> cancelled {false};
-    QSemaphore startGate;
-    QSemaphore credit;
-};
-
 namespace {
 
-const qint64 ChunkSize = 128 * 1024;
-QSemaphore SmbTransferSlots(4);
-
-class SemaphoreGuard
-{
-public:
-    explicit SemaphoreGuard(QSemaphore *semaphore)
-        : m_semaphore(semaphore) {}
-    ~SemaphoreGuard() { if (m_semaphore) m_semaphore->release(); }
-private:
-    QSemaphore *m_semaphore = nullptr;
-};
-
+const qint64 ChunkSize = 64 * 1024;
 const qint64 MaxBufferedBytes = 512 * 1024;
+const qint64 SmbSessionIdleMs = 30000;
 
 QByteArray reasonPhrase(int statusCode)
 {
@@ -160,6 +134,13 @@ bool samePeerAddress(const QHostAddress &left, const QHostAddress &right)
 
 } // namespace
 
+struct SmbSessionHolder
+{
+    QThread *thread = nullptr;
+    SmbStreamSession *worker = nullptr;
+    qint64 lastUsedMs = 0;
+};
+
 LocalFileStreamServer::LocalFileStreamServer(QObject *parent)
     : QObject(parent)
 {
@@ -172,6 +153,12 @@ LocalFileStreamServer::LocalFileStreamServer(QObject *parent)
     m_growingPumpTimer.setSingleShot(false);
     connect(&m_growingPumpTimer, SIGNAL(timeout()),
             this, SLOT(pumpGrowingTransfers()));
+
+    m_smbSessionCleanupTimer.setInterval(10000);
+    m_smbSessionCleanupTimer.setSingleShot(false);
+    connect(&m_smbSessionCleanupTimer, SIGNAL(timeout()),
+            this, SLOT(cleanupIdleSmbSessions()));
+    m_smbSessionCleanupTimer.start();
 }
 
 LocalFileStreamServer::~LocalFileStreamServer()
@@ -496,6 +483,9 @@ void LocalFileStreamServer::clear()
     }
 
     m_pendingRequests.clear();
+    m_smbSizePending.clear();
+    m_smbRequestSockets.clear();
+    shutdownAllSmbSessions();
     m_entries.clear();
     if (m_server.isListening()) {
         m_server.close();
@@ -590,12 +580,12 @@ void LocalFileStreamServer::pumpClientData(QTcpSocket *socket)
         return;
     }
 
-    if (transfer->smbWorker) {
-        if (transfer->smbCreditPending
+    if (transfer->smbRequestId != 0) {
+        if (transfer->smbAckPending
                 && (socket->state() == QAbstractSocket::UnconnectedState
                     || socket->bytesToWrite() < MaxBufferedBytes)) {
-            transfer->smbCreditPending = false;
-            transfer->smbWorker->credit.release();
+            transfer->smbAckPending = false;
+            acknowledgeSmbTransfer(transfer);
         }
         return;
     }
@@ -966,7 +956,13 @@ void LocalFileStreamServer::handleRequest(QTcpSocket *socket, const QByteArray &
                 << "mime" << entry.mimeType;
     }
 
-    startTransfer(socket, entry, start, end, partial, method == QByteArrayLiteral("HEAD"));
+    startTransfer(socket,
+                  token,
+                  entry,
+                  start,
+                  end,
+                  partial,
+                  method == QByteArrayLiteral("HEAD"));
 }
 
 void LocalFileStreamServer::resolveSmbSizeAndRetry(
@@ -1177,6 +1173,7 @@ bool LocalFileStreamServer::parseRange(const QByteArray &rangeHeader,
 }
 
 void LocalFileStreamServer::startTransfer(QTcpSocket *socket,
+                                          const QString &token,
                                           const StreamEntry &entry,
                                           qint64 start,
                                           qint64 end,
@@ -1184,9 +1181,7 @@ void LocalFileStreamServer::startTransfer(QTcpSocket *socket,
                                           bool headOnly,
                                           bool allowSmbRetry)
 {
-    if (!socket) {
-        return;
-    }
+    if (!socket) return;
 
     const qint64 contentLength = entry.size > 0 ? end - start + 1 : 0;
     if (headOnly || contentLength <= 0) {
@@ -1199,6 +1194,7 @@ void LocalFileStreamServer::startTransfer(QTcpSocket *socket,
     transfer->remaining = contentLength;
     transfer->nextOffset = start;
     transfer->id = m_nextTransferId++;
+    transfer->token = token;
 
     if (entry.type == StreamType::LocalFile) {
         QFile *file = new QFile(entry.filePath, this);
@@ -1209,7 +1205,6 @@ void LocalFileStreamServer::startTransfer(QTcpSocket *socket,
                                tr("The selected local file could not be opened.").toUtf8());
             return;
         }
-
         transfer->file = file;
         m_transfers.insert(socket, transfer);
         setLastError(QString());
@@ -1218,15 +1213,62 @@ void LocalFileStreamServer::startTransfer(QTcpSocket *socket,
         return;
     }
 
-    transfer->smbWorker = std::make_shared<SmbTransferWorkerState>();
+    transfer->smbRequestId = transfer->id;
+    transfer->smbStart = start;
+    transfer->smbEnd = end;
+    transfer->smbPartial = partial;
     m_transfers.insert(socket, transfer);
-    startAsyncSmbTransfer(socket,
-                          entry,
-                          start,
-                          end,
-                          partial,
-                          allowSmbRetry,
-                          transfer);
+    startAsyncSmbTransfer(socket, entry, start, end, partial,
+                          allowSmbRetry, transfer);
+}
+
+SmbStreamSession *LocalFileStreamServer::ensureSmbSession(
+        const QString &token, const StreamEntry &entry)
+{
+    SmbSessionHolder *existing = m_smbSessions.value(token, nullptr);
+    if (existing && existing->worker) {
+        existing->lastUsedMs = QDateTime::currentMSecsSinceEpoch();
+        return existing->worker;
+    }
+
+    QThread *thread = new QThread;
+    SmbStreamSession *worker = new SmbStreamSession(token,
+                                                    entry.smbHost,
+                                                    entry.smbPort,
+                                                    entry.smbShare,
+                                                    entry.smbPath,
+                                                    entry.smbDomain,
+                                                    entry.smbUsername,
+                                                    entry.smbPassword,
+                                                    entry.smbGuest);
+    worker->moveToThread(thread);
+
+    SmbSessionHolder *holder = new SmbSessionHolder;
+    holder->thread = thread;
+    holder->worker = worker;
+    holder->lastUsedMs = QDateTime::currentMSecsSinceEpoch();
+    m_smbSessions.insert(token, holder);
+
+    connect(worker, &SmbStreamSession::requestReady,
+            this, &LocalFileStreamServer::handleSmbRequestReady);
+    connect(worker, &SmbStreamSession::chunkReady,
+            this, &LocalFileStreamServer::handleSmbChunkReady);
+    connect(worker, &SmbStreamSession::requestFailed,
+            this, &LocalFileStreamServer::handleSmbRequestFailed);
+    connect(worker, &SmbStreamSession::stopped,
+            thread, &QThread::quit);
+    connect(thread, &QThread::finished,
+            worker, &QObject::deleteLater);
+    connect(thread, &QThread::finished,
+            this, [thread, holder]() {
+        thread->deleteLater();
+        delete holder;
+    });
+
+    thread->start();
+    qInfo() << "SailVideo SMB session: created persistent reader for"
+            << entry.smbHost << entry.smbShare << entry.smbPath;
+    return worker;
 }
 
 void LocalFileStreamServer::startAsyncSmbTransfer(QTcpSocket *socket,
@@ -1237,257 +1279,190 @@ void LocalFileStreamServer::startAsyncSmbTransfer(QTcpSocket *socket,
                                                    bool allowSmbRetry,
                                                    Transfer *transfer)
 {
-    if (!socket || !transfer || !transfer->smbWorker) {
+    Q_UNUSED(end)
+    Q_UNUSED(partial)
+    if (!socket || !transfer || transfer->smbRequestId == 0) return;
+
+    SmbStreamSession *session = ensureSmbSession(transfer->token, entry);
+    if (!session) {
+        closeTransfer(socket);
+        sendSimpleResponse(socket, 500, reasonPhrase(500),
+                           tr("Could not create the SMB streaming session.").toUtf8());
         return;
     }
 
-    const quint64 transferId = transfer->id;
-    const qint64 contentLength = entry.size > 0 ? end - start + 1 : 0;
-    const std::shared_ptr<SmbTransferWorkerState> state = transfer->smbWorker;
+    const quint64 requestId = transfer->smbRequestId;
+    m_smbRequestSockets.insert(requestId, QPointer<QTcpSocket>(socket));
+    const bool invoked = QMetaObject::invokeMethod(
+                session, "requestRange", Qt::QueuedConnection,
+                Q_ARG(quint64, requestId),
+                Q_ARG(qint64, start),
+                Q_ARG(qint64, transfer->remaining),
+                Q_ARG(bool, allowSmbRetry));
+    if (!invoked) {
+        m_smbRequestSockets.remove(requestId);
+        closeTransfer(socket);
+        sendSimpleResponse(socket, 500, reasonPhrase(500),
+                           tr("Could not queue the SMB Range request.").toUtf8());
+        return;
+    }
 
-    QPointer<LocalFileStreamServer> self(this);
-    QPointer<QTcpSocket> guardedSocket(socket);
+    qInfo() << "SailVideo SMB bridge: queued Range request"
+            << requestId << start << transfer->remaining
+            << "through persistent SMB session";
+}
 
-    QtConcurrent::run([self,
-                       guardedSocket,
-                       state,
-                       transferId,
-                       entry,
-                       start,
-                       end,
-                       partial,
-                       contentLength,
-                       allowSmbRetry]() {
-        SmbTransferSlots.acquire();
-        SemaphoreGuard slotGuard(&SmbTransferSlots);
+void LocalFileStreamServer::handleSmbRequestReady(quint64 requestId)
+{
+    QTcpSocket *socket = m_smbRequestSockets.value(requestId).data();
+    if (!socket) return;
+    Transfer *transfer = m_transfers.value(socket, nullptr);
+    if (!transfer || transfer->smbRequestId != requestId) return;
 
-        std::unique_ptr<SmbFileReader> reader;
-        QString openError;
+    const auto entryIt = m_entries.constFind(transfer->token);
+    if (entryIt == m_entries.constEnd()) {
+        closeTransfer(socket);
+        socket->disconnectFromHost();
+        return;
+    }
 
-        const int attempts = allowSmbRetry ? 2 : 1;
-        for (int attempt = 0;
-             attempt < attempts && !state->cancelled.load();
-             ++attempt) {
-            SmbBackend backend;
-            reader = backend.openFile(entry.smbHost,
-                                      entry.smbPort,
-                                      entry.smbShare,
-                                      entry.smbPath,
-                                      entry.smbDomain,
-                                      entry.smbUsername,
-                                      entry.smbPassword,
-                                      entry.smbGuest,
-                                      &openError);
+    SmbSessionHolder *holder = m_smbSessions.value(transfer->token, nullptr);
+    if (holder) holder->lastUsedMs = QDateTime::currentMSecsSinceEpoch();
+    transfer->smbHeadersSent = true;
+    setLastError(QString());
+    sendTransferHeaders(socket, entryIt.value(),
+                        transfer->smbStart, transfer->smbEnd,
+                        transfer->smbPartial, false);
+}
 
-            if (reader && reader->isOpen()) {
+void LocalFileStreamServer::handleSmbChunkReady(quint64 requestId,
+                                                 const QByteArray &chunk,
+                                                 bool lastChunk)
+{
+    QTcpSocket *socket = m_smbRequestSockets.value(requestId).data();
+    if (!socket) return;
+    Transfer *transfer = m_transfers.value(socket, nullptr);
+    if (!transfer || transfer->smbRequestId != requestId) return;
+
+    if (socket->state() == QAbstractSocket::UnconnectedState) {
+        closeTransfer(socket);
+        return;
+    }
+
+    SmbSessionHolder *holder = m_smbSessions.value(transfer->token, nullptr);
+    if (holder) holder->lastUsedMs = QDateTime::currentMSecsSinceEpoch();
+
+    if (!transfer->smbHeadersSent) {
+        handleSmbRequestReady(requestId);
+        transfer = m_transfers.value(socket, nullptr);
+        if (!transfer || transfer->smbRequestId != requestId) return;
+    }
+
+    if (chunk.isEmpty()) {
+        if (lastChunk) {
+            closeTransfer(socket);
+            socket->disconnectFromHost();
+        } else {
+            acknowledgeSmbTransfer(transfer);
+        }
+        return;
+    }
+
+    const qint64 written = socket->write(chunk);
+    if (written != chunk.size()) {
+        setLastError(tr("The local HTTP bridge could not queue SMB stream data."));
+        closeTransfer(socket);
+        socket->disconnectFromHost();
+        return;
+    }
+
+    transfer->remaining -= written;
+    transfer->nextOffset += written;
+    if (lastChunk || transfer->remaining <= 0) {
+        closeTransfer(socket);
+        socket->disconnectFromHost();
+    } else if (socket->bytesToWrite() < MaxBufferedBytes) {
+        acknowledgeSmbTransfer(transfer);
+    } else {
+        transfer->smbAckPending = true;
+    }
+}
+
+void LocalFileStreamServer::handleSmbRequestFailed(quint64 requestId,
+                                                    const QString &message)
+{
+    QTcpSocket *socket = m_smbRequestSockets.value(requestId).data();
+    if (!socket) {
+        m_smbRequestSockets.remove(requestId);
+        return;
+    }
+
+    Transfer *transfer = m_transfers.value(socket, nullptr);
+    if (!transfer || transfer->smbRequestId != requestId) {
+        m_smbRequestSockets.remove(requestId);
+        return;
+    }
+
+    const bool headersSent = transfer->smbHeadersSent;
+    const QString cleanMessage = message.isEmpty()
+            ? tr("The SMB Range request failed.") : message;
+    setLastError(cleanMessage);
+    closeTransfer(socket);
+
+    if (!headersSent && socket->state() != QAbstractSocket::UnconnectedState)
+        sendSimpleResponse(socket, 500, reasonPhrase(500), cleanMessage.toUtf8());
+    else
+        socket->disconnectFromHost();
+}
+
+void LocalFileStreamServer::acknowledgeSmbTransfer(Transfer *transfer)
+{
+    if (!transfer || transfer->smbRequestId == 0) return;
+    SmbSessionHolder *holder = m_smbSessions.value(transfer->token, nullptr);
+    if (!holder || !holder->worker) return;
+
+    transfer->smbAckPending = false;
+    holder->lastUsedMs = QDateTime::currentMSecsSinceEpoch();
+    QMetaObject::invokeMethod(holder->worker, "acknowledge",
+                              Qt::QueuedConnection,
+                              Q_ARG(quint64, transfer->smbRequestId));
+}
+
+void LocalFileStreamServer::shutdownSmbSession(const QString &token)
+{
+    SmbSessionHolder *holder = m_smbSessions.take(token);
+    if (!holder || !holder->worker) return;
+    qInfo() << "SailVideo SMB session: retiring persistent reader" << token.left(8);
+    QMetaObject::invokeMethod(holder->worker, "shutdown", Qt::QueuedConnection);
+}
+
+void LocalFileStreamServer::shutdownAllSmbSessions()
+{
+    const QStringList tokens = m_smbSessions.keys();
+    for (const QString &token : tokens) shutdownSmbSession(token);
+}
+
+void LocalFileStreamServer::cleanupIdleSmbSessions()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const QStringList tokens = m_smbSessions.keys();
+
+    for (const QString &token : tokens) {
+        bool active = false;
+        const QList<Transfer *> transfers = m_transfers.values();
+        for (Transfer *transfer : transfers) {
+            if (transfer && transfer->smbRequestId != 0
+                    && transfer->token == token) {
+                active = true;
                 break;
             }
-
-            reader.reset();
-            if (attempt + 1 < attempts && !state->cancelled.load()) {
-                qInfo() << "SailVideo SMB bridge: worker cold-NAS open retry";
-                QThread::msleep(800);
-            }
         }
+        if (active) continue;
 
-        if (state->cancelled.load()) {
-            return;
-        }
-
-        if (!reader || !reader->isOpen()) {
-            const QString message = openError.isEmpty()
-                    ? QObject::tr("Could not open SMB file stream.")
-                    : openError;
-
-            if (self) {
-                QTimer::singleShot(0, self.data(),
-                                   [self,
-                                    guardedSocket,
-                                    state,
-                                    transferId,
-                                    message]() {
-                    if (!self || !guardedSocket) {
-                        state->cancelled.store(true);
-                        state->startGate.release();
-                        state->credit.release();
-                        return;
-                    }
-
-                    LocalFileStreamServer::Transfer *current =
-                            self->m_transfers.value(guardedSocket.data(), nullptr);
-                    if (!current || current->id != transferId) {
-                        state->cancelled.store(true);
-                        state->startGate.release();
-                        state->credit.release();
-                        return;
-                    }
-
-                    self->setLastError(message);
-                    self->closeTransfer(guardedSocket.data());
-                    self->sendSimpleResponse(guardedSocket.data(),
-                                             500,
-                                             reasonPhrase(500),
-                                             message.toUtf8());
-                });
-            }
-            return;
-        }
-
-        if (self) {
-            QTimer::singleShot(0, self.data(),
-                               [self,
-                                guardedSocket,
-                                state,
-                                transferId,
-                                entry,
-                                start,
-                                end,
-                                partial]() {
-                if (!self || !guardedSocket) {
-                    state->cancelled.store(true);
-                    state->startGate.release();
-                    state->credit.release();
-                    return;
-                }
-
-                LocalFileStreamServer::Transfer *current =
-                        self->m_transfers.value(guardedSocket.data(), nullptr);
-                if (!current || current->id != transferId) {
-                    state->cancelled.store(true);
-                    state->startGate.release();
-                    state->credit.release();
-                    return;
-                }
-
-                self->setLastError(QString());
-                self->sendTransferHeaders(guardedSocket.data(),
-                                          entry,
-                                          start,
-                                          end,
-                                          partial,
-                                          false);
-                state->startGate.release();
-            });
-        }
-
-        // Do not read until headers are queued on the socket.
-        state->startGate.acquire();
-        if (state->cancelled.load()) {
-            return;
-        }
-
-        qint64 offset = start;
-        qint64 remaining = contentLength;
-
-        while (remaining > 0 && !state->cancelled.load()) {
-            state->credit.acquire();
-            if (state->cancelled.load()) {
-                break;
-            }
-
-            const qint64 wanted = qMin(ChunkSize, remaining);
-            QString readError;
-            const QByteArray data = reader->read(offset, wanted, &readError);
-
-            if (state->cancelled.load()) {
-                break;
-            }
-
-            if (data.isEmpty()) {
-                if (self) {
-                    QTimer::singleShot(0, self.data(),
-                                       [self,
-                                        guardedSocket,
-                                        state,
-                                        transferId,
-                                        readError]() {
-                        if (!self || !guardedSocket) {
-                            state->cancelled.store(true);
-                            state->credit.release();
-                            return;
-                        }
-
-                        LocalFileStreamServer::Transfer *current =
-                                self->m_transfers.value(guardedSocket.data(), nullptr);
-                        if (!current || current->id != transferId) {
-                            state->cancelled.store(true);
-                            state->credit.release();
-                            return;
-                        }
-
-                        const QString message = readError.isEmpty()
-                                ? QObject::tr("The SMB stream ended unexpectedly.")
-                                : QObject::tr("SMB stream read failed: %1").arg(readError);
-                        self->setLastError(message);
-                        self->closeTransfer(guardedSocket.data());
-                        guardedSocket->disconnectFromHost();
-                    });
-                }
-                break;
-            }
-
-            const bool lastChunk = data.size() >= remaining;
-
-            if (self) {
-                QTimer::singleShot(0, self.data(),
-                                   [self,
-                                    guardedSocket,
-                                    state,
-                                    transferId,
-                                    data,
-                                    lastChunk]() {
-                    if (!self || !guardedSocket) {
-                        state->cancelled.store(true);
-                        state->credit.release();
-                        return;
-                    }
-
-                    LocalFileStreamServer::Transfer *current =
-                            self->m_transfers.value(guardedSocket.data(), nullptr);
-                    if (!current || current->id != transferId) {
-                        state->cancelled.store(true);
-                        state->credit.release();
-                        return;
-                    }
-
-                    if (guardedSocket->state()
-                            == QAbstractSocket::UnconnectedState) {
-                        self->closeTransfer(guardedSocket.data());
-                        return;
-                    }
-
-                    const qint64 written = guardedSocket->write(data);
-                    if (written != data.size()) {
-                        self->setLastError(
-                                    QObject::tr("The local HTTP bridge could not queue SMB stream data."));
-                        self->closeTransfer(guardedSocket.data());
-                        guardedSocket->disconnectFromHost();
-                        return;
-                    }
-
-                    current->remaining -= written;
-                    current->nextOffset += written;
-
-                    if (lastChunk || current->remaining <= 0) {
-                        self->closeTransfer(guardedSocket.data());
-                        guardedSocket->disconnectFromHost();
-                        return;
-                    }
-
-                    if (guardedSocket->bytesToWrite() < MaxBufferedBytes) {
-                        state->credit.release();
-                    } else {
-                        current->smbCreditPending = true;
-                    }
-                });
-            }
-
-            offset += data.size();
-            remaining -= data.size();
-        }
-
-        // reader is destroyed HERE, on the same worker that created and used it.
-    });
+        SmbSessionHolder *holder = m_smbSessions.value(token, nullptr);
+        if (holder && now - holder->lastUsedMs >= SmbSessionIdleMs)
+            shutdownSmbSession(token);
+    }
 }
 
 void LocalFileStreamServer::startGrowingTransfer(QTcpSocket *socket,
@@ -1545,11 +1520,19 @@ void LocalFileStreamServer::closeTransfer(QTcpSocket *socket)
         transfer->file->close();
         transfer->file->deleteLater();
     }
-    if (transfer->smbWorker) {
-        transfer->smbWorker->cancelled.store(true);
-        transfer->smbWorker->startGate.release();
-        transfer->smbWorker->credit.release();
+
+    if (transfer->smbRequestId != 0) {
+        const quint64 requestId = transfer->smbRequestId;
+        m_smbRequestSockets.remove(requestId);
+        SmbSessionHolder *holder = m_smbSessions.value(transfer->token, nullptr);
+        if (holder && holder->worker) {
+            holder->lastUsedMs = QDateTime::currentMSecsSinceEpoch();
+            QMetaObject::invokeMethod(holder->worker, "cancelRequest",
+                                      Qt::QueuedConnection,
+                                      Q_ARG(quint64, requestId));
+        }
     }
+
     delete transfer;
 
     bool growingTransferLeft = false;

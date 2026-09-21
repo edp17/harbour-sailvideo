@@ -35,6 +35,7 @@ ApplicationWindow {
     property int pendingResumePosition: 0
     property bool pendingResumeSeek: false
     property int pendingResumeAttempts: 0
+    property double pendingResumeLastAttemptMs: 0
     property int lastKnownPosition: 0
     property bool playerSuspended: false
     property bool currentUsesStreamBridge: false
@@ -1444,6 +1445,7 @@ ApplicationWindow {
 
         pendingResumeSeek = false
         pendingResumeAttempts = 0
+        pendingResumeLastAttemptMs = 0
         resumeSeekTimer.stop()
         userSeekPending = true
         playbackStatus = qsTr("Seeking")
@@ -2349,6 +2351,9 @@ ApplicationWindow {
         syncSmbQueueIndices(cleanPath, "video")
 
         playSource(sourceUrl, streamUrl, fileTitle, resumePosition, true, "smb")
+        if (currentSmbSize > 0) {
+            playbackHistory.updateSourceSize(sourceUrl, currentSmbSize)
+        }
         return true
     }
 
@@ -2387,6 +2392,7 @@ ApplicationWindow {
         pendingResumePosition = resume
         pendingResumeSeek = resume > 5000
         pendingResumeAttempts = 0
+        pendingResumeLastAttemptMs = 0
         lastKnownPosition = resume
         currentMediaUrl = cleanSourceUrl
         currentPlaybackUrl = cleanPlaybackUrl
@@ -2593,31 +2599,46 @@ ApplicationWindow {
         if (Math.abs(mediaPlayer.position - target) < 1500) {
             pendingResumeSeek = false
             pendingResumeAttempts = 0
+            pendingResumeLastAttemptMs = 0
             lastKnownPosition = target
             resumeSeekTimer.stop()
             updatePlaybackStatus()
+            return
+        }
+
+        // Do not hammer a cold SMB Range bridge with a new seek every 300 ms.
+        // One seek can itself cause several demuxer HTTP probes/ranges.
+        var now = Date.now()
+        if (pendingResumeLastAttemptMs > 0
+                && now - pendingResumeLastAttemptMs < 1500) {
+            resumeSeekTimer.restart()
+            return
+        }
+
+        var readyForSeek = mediaPlayer.seekable
+                || mediaPlayer.status === MediaPlayer.Loaded
+                || mediaPlayer.status === MediaPlayer.Buffered
+                || mediaPlayer.status === MediaPlayer.Buffering
+                || mediaPlayer.playbackState === MediaPlayer.PlayingState
+
+        if (!readyForSeek) {
+            resumeSeekTimer.restart()
             return
         }
 
         ++pendingResumeAttempts
-        if (pendingResumeAttempts > 24) {
+        if (pendingResumeAttempts > 8) {
             pendingResumeSeek = false
             pendingResumeAttempts = 0
+            pendingResumeLastAttemptMs = 0
             resumeSeekTimer.stop()
             updatePlaybackStatus()
             return
         }
 
-        if (mediaPlayer.duration > 0
-                || mediaPlayer.seekable
-                || mediaPlayer.status === MediaPlayer.Loaded
-                || mediaPlayer.status === MediaPlayer.Buffered
-                || mediaPlayer.status === MediaPlayer.Buffering
-                || mediaPlayer.playbackState === MediaPlayer.PlayingState) {
-            mediaPlayer.seek(target)
-            lastKnownPosition = target
-        }
-
+        pendingResumeLastAttemptMs = now
+        mediaPlayer.seek(target)
+        lastKnownPosition = target
         resumeSeekTimer.restart()
     }
 
@@ -2818,8 +2839,12 @@ ApplicationWindow {
             if (castActivePicture) {
                 return
             }
+
             var clearPreparedAvi = aviCastProgressiveSession
                     || aviCastGrowingFileUrl.length > 0
+            var canAdvance = playbackQueueIndex >= 0
+                    && playbackQueueIndex + 1 < playbackQueue.length
+
             playbackCompleted = true
             lastKnownPosition = 0
             savePlaybackPosition(true)
@@ -2827,8 +2852,28 @@ ApplicationWindow {
                         castManager.deviceName.length > 0
                         ? castManager.deviceName
                         : qsTr("Chromecast"))
+
             if (clearPreparedAvi) {
                 releasePreparedAviCache()
+            }
+            if (canAdvance) {
+                castAutoNextVideoTimer.restart()
+            }
+        }
+    }
+
+    Connections {
+        target: localFileStreamServer
+
+        onLastResolvedSizeChanged: {
+            if (appWindow.currentSourceKind === "smb"
+                    && !appWindow.castMode
+                    && localFileStreamServer.lastResolvedSize > 0
+                    && appWindow.currentMediaUrl.length > 0) {
+                appWindow.currentSmbSize = localFileStreamServer.lastResolvedSize
+                playbackHistory.updateSourceSize(
+                            appWindow.currentMediaUrl,
+                            localFileStreamServer.lastResolvedSize)
             }
         }
     }
@@ -2932,8 +2977,21 @@ ApplicationWindow {
     }
 
     Timer {
+        id: castAutoNextVideoTimer
+        interval: 250
+        repeat: false
+        onTriggered: {
+            if (appWindow.videoCastActive
+                    && appWindow.playbackQueueIndex >= 0
+                    && appWindow.playbackQueueIndex + 1 < appWindow.playbackQueue.length) {
+                appWindow.playNextVideo()
+            }
+        }
+    }
+
+    Timer {
         id: resumeSeekTimer
-        interval: 300
+        interval: 500
         repeat: false
         onTriggered: appWindow.tryPendingResumeSeek()
     }

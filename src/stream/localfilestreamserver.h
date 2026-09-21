@@ -22,6 +22,7 @@ class QFile;
 class QTcpSocket;
 class SmbBackend;
 class SmbFileReader;
+struct SmbTransferWorkerState;
 
 class LocalFileStreamServer : public QObject
 {
@@ -116,11 +117,13 @@ private:
 
     struct Transfer {
         QFile *file = nullptr;
-        std::unique_ptr<SmbFileReader> smbReader;
+        std::shared_ptr<SmbTransferWorkerState> smbWorker;
         qint64 remaining = 0;
         qint64 nextOffset = 0;
+        quint64 id = 0;
         QString token;
         bool growing = false;
+        bool smbCreditPending = false;
     };
 
     bool ensureListening();
@@ -134,6 +137,22 @@ private:
     void setLastResolvedSize(qint64 size);
 
     void handleRequest(QTcpSocket *socket, const QByteArray &request);
+    void resolveSmbSizeAndRetry(QTcpSocket *socket,
+                                const QString &token,
+                                const QByteArray &request);
+    void sendTransferHeaders(QTcpSocket *socket,
+                             const StreamEntry &entry,
+                             qint64 start,
+                             qint64 end,
+                             bool partial,
+                             bool headOnly);
+    void startAsyncSmbTransfer(QTcpSocket *socket,
+                               const StreamEntry &entry,
+                               qint64 start,
+                               qint64 end,
+                               bool partial,
+                               bool allowSmbRetry,
+                               Transfer *transfer);
     void sendSimpleResponse(QTcpSocket *socket,
                             int statusCode,
                             const QByteArray &reason,
@@ -167,6 +186,8 @@ private:
     QHash<QString, StreamEntry> m_entries;
     QHash<QTcpSocket *, QByteArray> m_pendingRequests;
     QHash<QTcpSocket *, Transfer *> m_transfers;
+    QSet<QTcpSocket *> m_smbSizePending;
+    quint64 m_nextTransferId = 1;
     QTimer m_growingPumpTimer;
 };
 

@@ -3077,6 +3077,16 @@ ApplicationWindow {
                 resumeSeekTimer.stop()
                 appWindow.lastKnownPosition = 0
                 appWindow.savePlaybackPosition(true)
+
+                // Natural local playback completion should advance through the
+                // same folder/video queue used by the Previous/Next controls.
+                // Delay slightly so QtMultimedia can finish tearing down the
+                // completed AVI pipeline before openMedia() replaces it.
+                if (!appWindow.videoCastActive
+                        && appWindow.playbackQueueIndex >= 0
+                        && appWindow.playbackQueueIndex + 1 < appWindow.playbackQueue.length) {
+                    localAutoNextVideoTimer.restart()
+                }
             } else if (status !== MediaPlayer.NoMedia) {
                 appWindow.playbackCompleted = false
                 appWindow.tryPendingResumeSeek()
@@ -3156,6 +3166,23 @@ ApplicationWindow {
             if (appWindow.videoCastActive
                     && appWindow.playbackQueueIndex >= 0
                     && appWindow.playbackQueueIndex + 1 < appWindow.playbackQueue.length) {
+                appWindow.playNextVideo()
+            }
+        }
+    }
+
+    Timer {
+        id: localAutoNextVideoTimer
+        interval: 350
+        repeat: false
+        onTriggered: {
+            if (!appWindow.videoCastActive
+                    && appWindow.playbackCompleted
+                    && appWindow.playbackQueueIndex >= 0
+                    && appWindow.playbackQueueIndex + 1 < appWindow.playbackQueue.length) {
+                console.log("SailVideo auto-next: advancing from queue index "
+                            + appWindow.playbackQueueIndex
+                            + " to " + (appWindow.playbackQueueIndex + 1))
                 appWindow.playNextVideo()
             }
         }

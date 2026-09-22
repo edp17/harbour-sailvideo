@@ -116,6 +116,16 @@ ApplicationWindow {
     property string adjustmentStatus: ""
     property bool userSeekPending: false
 
+    // Sailfish QtMultimedia/GStreamer can deadlock when avidemux receives a
+    // flushing seek while its playback tasks are still running.  For local
+    // AVI playback, pause first, allow the pipeline to settle, then seek and
+    // resume only after the new position is observed.
+    property bool aviLocalSeekPending: false
+    property string aviLocalSeekPhase: ""
+    property int aviLocalSeekTarget: 0
+    property bool aviLocalSeekResume: false
+    property bool aviLocalSeekIsResume: false
+
     // Chromecast sender state. castRequested remains true while a Cast transfer
     // is being established, before the TLS session reports connected.
     property bool castRequested: false
@@ -436,6 +446,118 @@ ApplicationWindow {
 
         return valueEndsWithIgnoreCase(title, ".avi")
                 || valueEndsWithIgnoreCase(cleanUrl, ".avi")
+    }
+
+    function resetAviLocalSeek() {
+        aviLocalSeekPauseTimer.stop()
+        aviLocalSeekCompletionTimer.stop()
+        aviLocalSeekResumeTimer.stop()
+        aviLocalSeekPending = false
+        aviLocalSeekPhase = ""
+        aviLocalSeekTarget = 0
+        aviLocalSeekResume = false
+        aviLocalSeekIsResume = false
+        userSeekPending = false
+    }
+
+    function finishAviLocalSeek(reason) {
+        if (!aviLocalSeekPending) {
+            return
+        }
+
+        var resumeAfterSeek = aviLocalSeekResume
+        var resumeOperation = aviLocalSeekIsResume
+        var target = aviLocalSeekTarget
+        var actual = Math.max(0, mediaPlayer.position)
+
+        console.log("SailVideo AVI seek: finished reason=" + reason
+                    + " target=" + target + " actual=" + actual
+                    + " resume=" + resumeAfterSeek)
+
+        aviLocalSeekPauseTimer.stop()
+        aviLocalSeekCompletionTimer.stop()
+        aviLocalSeekPending = false
+        aviLocalSeekPhase = ""
+        aviLocalSeekTarget = 0
+        aviLocalSeekResume = false
+        aviLocalSeekIsResume = false
+        userSeekPending = false
+
+        if (resumeOperation) {
+            pendingResumeSeek = false
+            pendingResumeAttempts = 0
+            pendingResumeLastAttemptMs = 0
+            resumeSeekTimer.stop()
+        }
+
+        if (actual > 0 || target === 0) {
+            lastKnownPosition = actual
+        }
+
+        updatePlaybackStatus()
+        if (resumeAfterSeek
+                && !playerSuspended
+                && mediaPlayer.status !== MediaPlayer.NoMedia
+                && mediaPlayer.status !== MediaPlayer.InvalidMedia) {
+            aviLocalSeekResumeTimer.restart()
+        }
+    }
+
+    function performAviLocalSeek() {
+        if (!aviLocalSeekPending) {
+            return
+        }
+
+        // Do not send the avidemux flushing seek until QtMultimedia has really
+        // left PlayingState.  If something restarted playback meanwhile, pause
+        // again and wait for the next PausedState notification.
+        if (mediaPlayer.playbackState === MediaPlayer.PlayingState) {
+            aviLocalSeekPhase = "pausing"
+            console.log("SailVideo AVI seek: playback restarted before seek; pausing again")
+            mediaPlayer.pause()
+            return
+        }
+
+        aviLocalSeekPhase = "seeking"
+        console.log("SailVideo AVI seek: issuing paused seek target=" + aviLocalSeekTarget)
+        mediaPlayer.seek(aviLocalSeekTarget)
+        aviLocalSeekCompletionTimer.restart()
+    }
+
+    function startAviLocalSeek(target, resumeAfterSeek, isResumeOperation) {
+        aviLocalSeekPauseTimer.stop()
+        aviLocalSeekCompletionTimer.stop()
+        aviLocalSeekResumeTimer.stop()
+
+        aviLocalSeekPending = true
+        aviLocalSeekPhase = "pausing"
+        aviLocalSeekTarget = Math.max(0, Math.round(target))
+        aviLocalSeekResume = resumeAfterSeek === true
+        aviLocalSeekIsResume = isResumeOperation === true
+        if (!aviLocalSeekIsResume) {
+            userSeekPending = true
+        }
+
+        playbackStatus = aviLocalSeekIsResume ? qsTr("Resuming") : qsTr("Seeking")
+        console.log("SailVideo AVI seek: pause-before-seek target=" + aviLocalSeekTarget
+                    + " resume=" + aviLocalSeekResume
+                    + " state=" + mediaPlayer.playbackState)
+
+        // Guard the whole operation as well as the seek itself.  This does not
+        // make a blocked GStreamer call interruptible, but it prevents a lost
+        // PausedState notification from leaving SailVideo permanently pending.
+        aviLocalSeekCompletionTimer.restart()
+
+        if (mediaPlayer.playbackState === MediaPlayer.PlayingState) {
+            mediaPlayer.pause()
+            if (mediaPlayer.playbackState === MediaPlayer.PausedState) {
+                aviLocalSeekPhase = "paused"
+                aviLocalSeekPauseTimer.restart()
+            }
+        } else {
+            aviLocalSeekPhase = "paused"
+            aviLocalSeekPauseTimer.restart()
+        }
     }
 
     function castVideoFormatSupported(title, mediaUrl) {
@@ -1398,8 +1520,8 @@ ApplicationWindow {
         suspendPlayback()
     }
 
-    function requestSeek(targetPosition) {
-        if (!hasMedia || userSeekPending) {
+    function requestSeek(targetPosition, forceResumeAfterSeek) {
+        if (!hasMedia || userSeekPending || aviLocalSeekPending) {
             return
         }
 
@@ -1447,10 +1569,19 @@ ApplicationWindow {
         pendingResumeAttempts = 0
         pendingResumeLastAttemptMs = 0
         resumeSeekTimer.stop()
-        userSeekPending = true
         playbackStatus = qsTr("Seeking")
         lastKnownPosition = safeTarget
         playbackHistory.updatePosition(currentMediaUrl, duration, safeTarget)
+
+        if (isAviVideo(currentMediaTitle, currentMediaUrl)) {
+            startAviLocalSeek(safeTarget,
+                              forceResumeAfterSeek === true
+                              || mediaPlayer.playbackState === MediaPlayer.PlayingState,
+                              false)
+            return
+        }
+
+        userSeekPending = true
         mediaPlayer.seek(safeTarget)
         seekSettleTimer.restart()
     }
@@ -1487,7 +1618,11 @@ ApplicationWindow {
             return
         }
 
-        requestSeek(0)
+        var localAvi = isAviVideo(currentMediaTitle, currentMediaUrl)
+        requestSeek(0, localAvi)
+        if (localAvi) {
+            return
+        }
         if (mediaPlayer.playbackState !== MediaPlayer.PlayingState) {
             mediaPlayer.play()
         }
@@ -2413,6 +2548,7 @@ ApplicationWindow {
             currentSmbSize = 0
         }
 
+        resetAviLocalSeek()
         mediaPlayer.stop()
         if (!remoteQueueSwitch) {
             resetPlaybackAdjustmentsForNewVideo()
@@ -2533,6 +2669,7 @@ ApplicationWindow {
             return
         }
 
+        resetAviLocalSeek()
         savePlaybackPosition(false)
         if (mediaPlayer.position > 0) {
             lastKnownPosition = mediaPlayer.position
@@ -2637,14 +2774,33 @@ ApplicationWindow {
         }
 
         pendingResumeLastAttemptMs = now
-        mediaPlayer.seek(target)
         lastKnownPosition = target
+
+        if (isAviVideo(currentMediaTitle, currentMediaUrl)) {
+            // The same avidemux deadlock can occur during automatic resume.
+            // Route resume through the pause -> settle -> seek -> resume path
+            // instead of repeatedly issuing seeks while the AVI is playing.
+            if (aviLocalSeekPending) {
+                resumeSeekTimer.stop()
+                return
+            }
+            startAviLocalSeek(target, true, true)
+            resumeSeekTimer.stop()
+            return
+        }
+
+        mediaPlayer.seek(target)
         resumeSeekTimer.restart()
     }
 
     function updatePlaybackStatus() {
         if (playbackError.length > 0) {
             playbackStatus = playbackError
+            return
+        }
+
+        if (aviLocalSeekPending) {
+            playbackStatus = aviLocalSeekIsResume ? qsTr("Resuming") : qsTr("Seeking")
             return
         }
 
@@ -2930,6 +3086,14 @@ ApplicationWindow {
         }
 
         onPlaybackStateChanged: {
+            if (appWindow.aviLocalSeekPending
+                    && appWindow.aviLocalSeekPhase === "pausing"
+                    && playbackState === MediaPlayer.PausedState) {
+                appWindow.aviLocalSeekPhase = "paused"
+                console.log("SailVideo AVI seek: PausedState reached; waiting before seek")
+                aviLocalSeekPauseTimer.restart()
+            }
+
             appWindow.updatePlaybackStatus()
 
             if (playbackState === MediaPlayer.PlayingState
@@ -2940,6 +3104,7 @@ ApplicationWindow {
             }
 
             if (!appWindow.playerSuspended
+                    && !appWindow.aviLocalSeekPending
                     && playbackState !== MediaPlayer.PlayingState
                     && status !== MediaPlayer.NoMedia
                     && status !== MediaPlayer.EndOfMedia) {
@@ -2948,6 +3113,13 @@ ApplicationWindow {
         }
 
         onPositionChanged: {
+            if (appWindow.aviLocalSeekPending
+                    && appWindow.aviLocalSeekPhase === "seeking"
+                    && Math.abs(position - appWindow.aviLocalSeekTarget) < 7500) {
+                console.log("SailVideo AVI seek: target position observed=" + position)
+                appWindow.finishAviLocalSeek("position")
+            }
+
             if (appWindow.pendingResumeSeek
                     && Math.abs(position - appWindow.pendingResumePosition) < 1500) {
                 appWindow.pendingResumeSeek = false
@@ -3003,6 +3175,43 @@ ApplicationWindow {
         onTriggered: {
             appWindow.userSeekPending = false
             appWindow.updatePlaybackStatus()
+        }
+    }
+
+    Timer {
+        id: aviLocalSeekPauseTimer
+        interval: 500
+        repeat: false
+        onTriggered: appWindow.performAviLocalSeek()
+    }
+
+    Timer {
+        id: aviLocalSeekCompletionTimer
+        interval: 6000
+        repeat: false
+        onTriggered: {
+            if (appWindow.aviLocalSeekPending) {
+                console.warn("SailVideo AVI seek: timeout phase="
+                             + appWindow.aviLocalSeekPhase
+                             + " target=" + appWindow.aviLocalSeekTarget
+                             + " actual=" + mediaPlayer.position)
+                appWindow.finishAviLocalSeek("timeout")
+            }
+        }
+    }
+
+    Timer {
+        id: aviLocalSeekResumeTimer
+        interval: 150
+        repeat: false
+        onTriggered: {
+            if (!appWindow.playerSuspended
+                    && !appWindow.videoCastActive
+                    && mediaPlayer.status !== MediaPlayer.NoMedia
+                    && mediaPlayer.status !== MediaPlayer.InvalidMedia
+                    && mediaPlayer.playbackState !== MediaPlayer.PlayingState) {
+                mediaPlayer.play()
+            }
         }
     }
 

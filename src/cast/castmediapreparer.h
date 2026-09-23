@@ -134,6 +134,7 @@ private:
     qint64 m_timelineOffset = 0;
     SourceSeekPhase m_sourceSeekPhase = SourceSeekNone;
     qint64 m_sourceSeekPhaseStartedMs = 0;
+    bool m_sourceSeekAsyncDone = false;
     GstPad *m_sourceSeekVideoPad = nullptr;
     GstPad *m_sourceSeekAudioPad = nullptr;
     GstElement *m_sourceSeekVideoSink = nullptr;

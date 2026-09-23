@@ -262,6 +262,7 @@ bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
     }
     m_sourceSeekPhase = SourceSeekNone;
     m_sourceSeekPhaseStartedMs = 0;
+    m_sourceSeekAsyncDone = false;
     releaseSourceSeekWarmupRefs();
 
     const QString cachedPath = m_preparedFiles.value(key);
@@ -363,6 +364,7 @@ void CastMediaPreparer::cancelInternal(bool preserveOutput)
     m_requestedStartPositionMs = 0;
     m_sourceSeekPhase = SourceSeekNone;
     m_sourceSeekPhaseStartedMs = 0;
+    m_sourceSeekAsyncDone = false;
 }
 
 void CastMediaPreparer::clearPreparedCache()
@@ -985,6 +987,23 @@ void CastMediaPreparer::processTranscodeSourceSeek()
                 << "SailVideo Cast transcode: issuing paused source seek to"
                 << m_requestedStartPositionMs << "ms";
 
+        // A flushing GStreamer seek completes asynchronously. Drop any
+        // ASYNC_DONE left over from the initial preroll so the next one can be
+        // unambiguously attributed to this source seek.
+        if (m_bus) {
+            for (;;) {
+                GstMessage *staleAsync = gst_bus_pop_filtered(
+                            m_bus, GST_MESSAGE_ASYNC_DONE);
+                if (!staleAsync) {
+                    break;
+                }
+                qInfo() << diagnosticTag()
+                        << "discarding pre-seek ASYNC_DONE";
+                gst_message_unref(staleAsync);
+            }
+        }
+        m_sourceSeekAsyncDone = false;
+
         const gboolean seeked = gst_element_seek_simple(
                     m_pipeline,
                     GST_FORMAT_TIME,
@@ -1004,9 +1023,18 @@ void CastMediaPreparer::processTranscodeSourceSeek()
     }
 
     if (m_sourceSeekPhase == SourceSeekPostSeek) {
-        if (now - m_sourceSeekPhaseStartedMs < 650) {
+        // gst_element_seek_simple() returning TRUE only means the seek was
+        // accepted. Do not tear down the warm-up sinks and attach the WebM
+        // encoders until the flushing seek has actually completed preroll.
+        if (!m_sourceSeekAsyncDone) {
+            if (now - m_sourceSeekPhaseStartedMs > 5000) {
+                finishFailure(tr("The AVI source seek did not finish preroll in time."));
+            }
             return;
         }
+
+        qInfo() << diagnosticTag()
+                << "post-seek ASYNC_DONE confirmed; activating WebM output";
 
         gint64 position = GST_CLOCK_TIME_NONE;
         if (gst_element_query_position(m_pipeline,
@@ -1446,7 +1474,15 @@ void CastMediaPreparer::pollBus()
         }
 
         if (messageType == GST_MESSAGE_ASYNC_DONE) {
-            qInfo() << diagnosticTag() << "GStreamer bus ASYNC_DONE";
+            if (m_mode.load() == TranscodeWebmMode
+                    && m_sourceSeekPhase == SourceSeekPostSeek
+                    && GST_MESSAGE_SRC(message) == GST_OBJECT(m_pipeline)) {
+                m_sourceSeekAsyncDone = true;
+                qInfo() << diagnosticTag()
+                        << "GStreamer bus post-seek ASYNC_DONE";
+            } else {
+                qInfo() << diagnosticTag() << "GStreamer bus ASYNC_DONE";
+            }
             gst_message_unref(message);
             continue;
         }
@@ -1621,6 +1657,7 @@ void CastMediaPreparer::teardownPipeline()
     releaseSourceSeekWarmupRefs();
     m_sourceSeekPhase = SourceSeekNone;
     m_sourceSeekPhaseStartedMs = 0;
+    m_sourceSeekAsyncDone = false;
 
     m_source = nullptr;
     m_demux = nullptr;

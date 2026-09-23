@@ -1,7 +1,7 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
 Version:    1.1.0.17
-Release:    1
+Release:    2
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
 Source0:    %{name}-%{version}.tar.bz2

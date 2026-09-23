@@ -95,6 +95,8 @@ private:
     bool activateTranscodeOutputAfterSeek(QString *errorMessage);
     void processTranscodeSourceSeek();
     void releaseSourceSeekWarmupRefs();
+    QString diagnosticTag() const;
+    void logPipelineState(const char *event) const;
     bool discardPad(GstPad *pad);
 
     void requestTranscodeFallback(const QString &reason);
@@ -125,6 +127,9 @@ private:
     std::atomic<int> m_mode {NoPreparationMode};
     bool m_streamReadyEmitted = false;
     qint64 m_lastProgressBytes = 0;
+    quint64 m_diagnosticGeneration = 0;
+    qint64 m_lastDiagnosticOutputBytes = -1;
+    qint64 m_lastDiagnosticOutputLogMs = 0;
     qint64 m_requestedStartPositionMs = 0;
     qint64 m_timelineOffset = 0;
     SourceSeekPhase m_sourceSeekPhase = SourceSeekNone;

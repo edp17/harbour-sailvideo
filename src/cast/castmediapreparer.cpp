@@ -203,6 +203,34 @@ QString CastMediaPreparer::contentTypeForPath(const QString &path) const
             : QStringLiteral("video/mp4");
 }
 
+QString CastMediaPreparer::diagnosticTag() const
+{
+    return QStringLiteral("[AVI prep %1 seek %2ms]")
+            .arg(m_diagnosticGeneration)
+            .arg(m_requestedStartPositionMs);
+}
+
+void CastMediaPreparer::logPipelineState(const char *event) const
+{
+    if (!m_pipeline) {
+        qInfo() << diagnosticTag() << event << "pipeline=null"
+                << "phase" << int(m_sourceSeekPhase)
+                << "mode" << m_mode.load();
+        return;
+    }
+
+    GstState current = GST_STATE_VOID_PENDING;
+    GstState pending = GST_STATE_VOID_PENDING;
+    gst_element_get_state(m_pipeline, &current, &pending, 0);
+
+    qInfo() << diagnosticTag() << event
+            << "state" << gst_element_state_get_name(current)
+            << "pending" << gst_element_state_get_name(pending)
+            << "phase" << int(m_sourceSeekPhase)
+            << "videoLinked" << m_videoLinked.load()
+            << "audioLinked" << m_audioLinked.load();
+}
+
 bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
                                    const QString &sourceKey,
                                    qint64 startPositionMs)
@@ -223,6 +251,11 @@ bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
             : sourceKey.trimmed();
 
     m_requestedStartPositionMs = qMax<qint64>(0, startPositionMs);
+    ++m_diagnosticGeneration;
+    m_lastDiagnosticOutputBytes = -1;
+    m_lastDiagnosticOutputLogMs = 0;
+    qInfo() << diagnosticTag() << "prepare started";
+
     if (m_timelineOffset != 0) {
         m_timelineOffset = 0;
         emit timelineOffsetChanged();
@@ -281,7 +314,9 @@ bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
         return false;
     }
 
-    qInfo() << "SailVideo Cast remux: trying lossless AVI -> MP4 preparation";
+    qInfo() << diagnosticTag()
+            << "SailVideo Cast remux: trying lossless AVI -> MP4 preparation";
+    logPipelineState("remux start requested");
     return true;
 }
 
@@ -300,6 +335,13 @@ void CastMediaPreparer::cancelInternal(bool preserveOutput)
     if (!m_busy.load() && !m_pipeline) {
         return;
     }
+
+    qInfo() << diagnosticTag() << "cancel requested; preserveOutput"
+            << preserveOutput << "partPathExists"
+            << (!m_partPath.isEmpty() && QFileInfo(m_partPath).exists())
+            << "partBytes"
+            << (m_partPath.isEmpty() ? 0 : QFileInfo(m_partPath).size());
+    logPipelineState("before cancel teardown");
 
     setBusy(false);
     m_mode.store(NoPreparationMode);
@@ -493,6 +535,8 @@ bool CastMediaPreparer::startTranscodePipeline(QString *errorMessage)
         return false;
     }
 
+    qInfo() << diagnosticTag() << "creating VP8/Vorbis transcode pipeline";
+
     m_pipeline = gst_pipeline_new("sailvideo-cast-avi-transcode");
     m_source = gst_element_factory_make("uridecodebin", "decode");
 
@@ -515,7 +559,8 @@ bool CastMediaPreparer::startTranscodePipeline(QString *errorMessage)
         // streaming pipeline has first been paused and allowed to settle.
         m_sourceSeekPhase = SourceSeekWarmup;
         m_sourceSeekPhaseStartedMs = QDateTime::currentMSecsSinceEpoch();
-        qInfo() << "SailVideo Cast transcode: warming AVI source before seek to"
+        qInfo() << diagnosticTag()
+                << "SailVideo Cast transcode: warming AVI source before seek to"
                 << m_requestedStartPositionMs << "ms";
     }
 
@@ -533,6 +578,9 @@ bool CastMediaPreparer::startTranscodePipeline(QString *errorMessage)
 
     const GstStateChangeReturn state = gst_element_set_state(
                 m_pipeline, GST_STATE_PLAYING);
+    qInfo() << diagnosticTag()
+            << "transcode PLAYING request return" << int(state);
+    logPipelineState("after transcode PLAYING request");
     if (state == GST_STATE_CHANGE_FAILURE) {
         if (errorMessage) {
             *errorMessage = tr("GStreamer could not start the AVI transcoding pipeline.");
@@ -865,8 +913,10 @@ bool CastMediaPreparer::activateTranscodeOutputAfterSeek(QString *errorMessage)
         return false;
     }
 
-    qInfo() << "SailVideo Cast transcode: source seek ready; WebM timeline 0 maps to AVI"
+    qInfo() << diagnosticTag()
+            << "SailVideo Cast transcode: source seek ready; WebM timeline 0 maps to AVI"
             << m_timelineOffset << "ms";
+    logPipelineState("after source-seek PLAYING request");
     return true;
 }
 
@@ -892,9 +942,12 @@ void CastMediaPreparer::processTranscodeSourceSeek()
             return;
         }
 
-        qInfo() << "SailVideo Cast transcode: pausing warmed AVI pipeline before source seek";
+        qInfo() << diagnosticTag()
+                << "SailVideo Cast transcode: pausing warmed AVI pipeline before source seek";
         const GstStateChangeReturn state =
                 gst_element_set_state(m_pipeline, GST_STATE_PAUSED);
+        qInfo() << diagnosticTag()
+                << "source-seek PAUSED request return" << int(state);
         if (state == GST_STATE_CHANGE_FAILURE) {
             finishFailure(tr("The AVI transcode pipeline could not pause before seeking."));
             return;
@@ -910,7 +963,8 @@ void CastMediaPreparer::processTranscodeSourceSeek()
         gst_element_get_state(m_pipeline, &state, &pending, 0);
 
         if (state == GST_STATE_PAUSED) {
-            qInfo() << "SailVideo Cast transcode: PausedState reached before source seek";
+            qInfo() << diagnosticTag()
+                    << "SailVideo Cast transcode: PausedState reached before source seek";
             m_sourceSeekPhase = SourceSeekSettling;
             m_sourceSeekPhaseStartedMs = now;
             return;
@@ -927,7 +981,8 @@ void CastMediaPreparer::processTranscodeSourceSeek()
             return;
         }
 
-        qInfo() << "SailVideo Cast transcode: issuing paused source seek to"
+        qInfo() << diagnosticTag()
+                << "SailVideo Cast transcode: issuing paused source seek to"
                 << m_requestedStartPositionMs << "ms";
 
         const gboolean seeked = gst_element_seek_simple(
@@ -936,6 +991,8 @@ void CastMediaPreparer::processTranscodeSourceSeek()
                     static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH
                                               | GST_SEEK_FLAG_KEY_UNIT),
                     m_requestedStartPositionMs * GST_MSECOND);
+        qInfo() << diagnosticTag()
+                << "source seek result" << bool(seeked);
         if (!seeked) {
             finishFailure(tr("The AVI source could not seek to the requested Chromecast position."));
             return;
@@ -956,7 +1013,8 @@ void CastMediaPreparer::processTranscodeSourceSeek()
                                        GST_FORMAT_TIME,
                                        &position)
                 && position != GST_CLOCK_TIME_NONE) {
-            qInfo() << "SailVideo Cast transcode: paused source reports"
+            qInfo() << diagnosticTag()
+                    << "SailVideo Cast transcode: paused source reports"
                     << (position / GST_MSECOND) << "ms after seek";
         }
 
@@ -1299,6 +1357,13 @@ void CastMediaPreparer::pollBus()
         if (!m_busy.load()) {
             return;
         }
+
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (m_sourceSeekPhase != SourceSeekComplete
+                && now - m_lastDiagnosticOutputLogMs >= 1000) {
+            m_lastDiagnosticOutputLogMs = now;
+            logPipelineState("source-seek phase heartbeat");
+        }
     }
 
     if (m_mode.load() == TranscodeWebmMode
@@ -1306,6 +1371,22 @@ void CastMediaPreparer::pollBus()
             && !m_partPath.isEmpty()) {
         const QFileInfo growingFile(m_partPath);
         const qint64 bytes = growingFile.exists() ? growingFile.size() : 0;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+        if (m_lastDiagnosticOutputBytes < 0
+                || qAbs(bytes - m_lastDiagnosticOutputBytes) >= (256 * 1024)
+                || now - m_lastDiagnosticOutputLogMs >= 1000) {
+            qInfo() << diagnosticTag()
+                    << "WebM output growth:" << bytes << "bytes;"
+                    << "delta" << (m_lastDiagnosticOutputBytes < 0
+                                   ? bytes
+                                   : bytes - m_lastDiagnosticOutputBytes)
+                    << "videoLinked" << m_videoLinked.load()
+                    << "audioLinked" << m_audioLinked.load()
+                    << "readyEmitted" << m_streamReadyEmitted;
+            m_lastDiagnosticOutputBytes = bytes;
+            m_lastDiagnosticOutputLogMs = now;
+        }
 
         if (bytes >= m_lastProgressBytes + (1024 * 1024)) {
             m_lastProgressBytes = bytes;
@@ -1321,7 +1402,8 @@ void CastMediaPreparer::pollBus()
                 && bytes >= StartBufferBytes) {
             m_streamReadyEmitted = true;
             const QString fileUrl = QUrl::fromLocalFile(m_partPath).toString();
-            qInfo() << "SailVideo Cast transcode: progressive WebM buffer ready"
+            qInfo() << diagnosticTag()
+                    << "SailVideo Cast transcode: progressive WebM buffer ready"
                     << bytes << "bytes";
             emit transcodeStreamReady(m_sourceKey,
                                       fileUrl,
@@ -1333,12 +1415,69 @@ void CastMediaPreparer::pollBus()
         GstMessage *message = gst_bus_pop_filtered(
                     m_bus,
                     static_cast<GstMessageType>(GST_MESSAGE_ERROR
-                                                | GST_MESSAGE_EOS));
+                                                | GST_MESSAGE_WARNING
+                                                | GST_MESSAGE_EOS
+                                                | GST_MESSAGE_STATE_CHANGED
+                                                | GST_MESSAGE_ASYNC_DONE
+                                                | GST_MESSAGE_STREAM_START));
         if (!message) {
             break;
         }
 
-        if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ERROR) {
+        const GstMessageType messageType = GST_MESSAGE_TYPE(message);
+
+        if (messageType == GST_MESSAGE_STATE_CHANGED) {
+            if (GST_MESSAGE_SRC(message) == GST_OBJECT(m_pipeline)) {
+                GstState oldState = GST_STATE_VOID_PENDING;
+                GstState newState = GST_STATE_VOID_PENDING;
+                GstState pendingState = GST_STATE_VOID_PENDING;
+                gst_message_parse_state_changed(message,
+                                                &oldState,
+                                                &newState,
+                                                &pendingState);
+                qInfo() << diagnosticTag()
+                        << "GStreamer bus pipeline state"
+                        << gst_element_state_get_name(oldState)
+                        << "->" << gst_element_state_get_name(newState)
+                        << "pending" << gst_element_state_get_name(pendingState);
+            }
+            gst_message_unref(message);
+            continue;
+        }
+
+        if (messageType == GST_MESSAGE_ASYNC_DONE) {
+            qInfo() << diagnosticTag() << "GStreamer bus ASYNC_DONE";
+            gst_message_unref(message);
+            continue;
+        }
+
+        if (messageType == GST_MESSAGE_STREAM_START) {
+            qInfo() << diagnosticTag() << "GStreamer bus STREAM_START";
+            gst_message_unref(message);
+            continue;
+        }
+
+        if (messageType == GST_MESSAGE_WARNING) {
+            GError *warning = nullptr;
+            gchar *debug = nullptr;
+            gst_message_parse_warning(message, &warning, &debug);
+            qWarning() << diagnosticTag()
+                       << "GStreamer bus WARNING:"
+                       << (warning && warning->message
+                           ? QString::fromUtf8(warning->message)
+                           : QStringLiteral("<no warning text>"));
+            if (debug && *debug) {
+                qWarning() << diagnosticTag()
+                           << "GStreamer warning detail:"
+                           << QString::fromUtf8(debug);
+            }
+            if (warning) g_error_free(warning);
+            g_free(debug);
+            gst_message_unref(message);
+            continue;
+        }
+
+        if (messageType == GST_MESSAGE_ERROR) {
             GError *error = nullptr;
             gchar *debug = nullptr;
             gst_message_parse_error(message, &error, &debug);
@@ -1348,7 +1487,8 @@ void CastMediaPreparer::pollBus()
                 detail = QString::fromUtf8(error->message);
             }
             if (debug && *debug) {
-                qWarning() << "SailVideo Cast preparation GStreamer detail:"
+                qWarning() << diagnosticTag()
+                           << "SailVideo Cast preparation GStreamer detail:"
                            << QString::fromUtf8(debug);
             }
 
@@ -1375,7 +1515,8 @@ void CastMediaPreparer::pollBus()
             return;
         }
 
-        if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_EOS) {
+        if (messageType == GST_MESSAGE_EOS) {
+            qInfo() << diagnosticTag() << "GStreamer bus EOS";
             gst_message_unref(message);
 
             if (!m_videoLinked.load()) {
@@ -1394,6 +1535,9 @@ void CastMediaPreparer::pollBus()
 
 void CastMediaPreparer::finishSuccess()
 {
+    qInfo() << diagnosticTag() << "preparation finished successfully;"
+            << "finalBytes"
+            << (m_partPath.isEmpty() ? 0 : QFileInfo(m_partPath).size());
     const QString sourceKey = m_sourceKey;
     const QString outputPath = m_outputPath;
     const QString partPath = m_partPath;
@@ -1433,6 +1577,10 @@ void CastMediaPreparer::finishSuccess()
 
 void CastMediaPreparer::finishFailure(const QString &message)
 {
+    qWarning() << diagnosticTag() << "preparation failed:" << message
+               << "partBytes"
+               << (m_partPath.isEmpty() ? 0 : QFileInfo(m_partPath).size());
+    logPipelineState("failure state");
     const QString sourceKey = m_sourceKey;
 
     setBusy(false);
@@ -1452,7 +1600,12 @@ void CastMediaPreparer::teardownPipeline()
     m_busTimer.stop();
 
     if (m_pipeline) {
-        gst_element_set_state(m_pipeline, GST_STATE_NULL);
+        logPipelineState("teardown begin");
+        const GstStateChangeReturn nullState =
+                gst_element_set_state(m_pipeline, GST_STATE_NULL);
+        qInfo() << diagnosticTag()
+                << "pipeline NULL request return" << int(nullState);
+        logPipelineState("after NULL request");
     }
 
     if (m_bus) {
@@ -1473,6 +1626,8 @@ void CastMediaPreparer::teardownPipeline()
     m_demux = nullptr;
     m_mux = nullptr;
     m_sink = nullptr;
+
+    qInfo() << diagnosticTag() << "pipeline teardown complete";
 }
 
 void CastMediaPreparer::setBusy(bool busy)

@@ -222,6 +222,18 @@ QString LocalFileStreamServer::streamUrlForLocalFile(const QString &urlOrPath)
             ? mimeType.name()
             : QStringLiteral("application/octet-stream");
     entry.size = fileInfo.size();
+
+    // When a completed progressive WebM is re-exposed as a normal Range file,
+    // carry its diagnostic stream id across so receiver requests can be
+    // correlated with the generation that produced it.
+    for (auto it = m_entries.constBegin(); it != m_entries.constEnd(); ++it) {
+        if (it->diagnosticId > 0
+                && it->filePath == entry.filePath) {
+            entry.diagnosticId = it->diagnosticId;
+            break;
+        }
+    }
+
     setLastResolvedSize(entry.size);
 
     const QString token = createToken();
@@ -353,6 +365,7 @@ QString LocalFileStreamServer::lanStreamUrlForGrowingLocalFile(
             ? QStringLiteral("video/webm")
             : mimeType.trimmed();
     entry.size = info.size();
+    entry.diagnosticId = m_nextGrowingStreamDiagnosticId++;
 
     const QString token = createToken();
     m_entries.insert(token, entry);
@@ -365,8 +378,9 @@ QString LocalFileStreamServer::lanStreamUrlForGrowingLocalFile(
                    + entry.fileName);
 
     setLastError(QString());
-    qInfo() << "SailVideo Cast bridge: progressive growing-file URL ready;"
-            << entry.size << "bytes buffered";
+    qInfo() << "SailVideo Cast bridge: growing stream"
+            << entry.diagnosticId
+            << "URL ready;" << entry.size << "bytes buffered";
     return lanUrl.toString();
 }
 
@@ -383,11 +397,11 @@ void LocalFileStreamServer::markGrowingLocalFileComplete(const QString &urlOrPat
                 && it->filePath == path) {
             it->size = finalSize;
             it->growingComplete = true;
+            qInfo() << "SailVideo Cast bridge: growing stream"
+                    << it->diagnosticId
+                    << "complete;" << finalSize << "bytes";
         }
     }
-
-    qInfo() << "SailVideo Cast bridge: growing WebM complete;"
-            << finalSize << "bytes";
     pumpGrowingTransfers();
 }
 
@@ -402,6 +416,9 @@ void LocalFileStreamServer::abortGrowingLocalFile(const QString &urlOrPath)
         if (it->type == StreamType::GrowingLocalFile
                 && it->filePath == path) {
             it->growingFailed = true;
+            qInfo() << "SailVideo Cast bridge: growing stream"
+                    << it->diagnosticId << "aborted at"
+                    << QFileInfo(path).size() << "bytes";
         }
     }
 
@@ -895,6 +912,8 @@ void LocalFileStreamServer::handleRequest(QTcpSocket *socket, const QByteArray &
         return;
     }
 
+    const QByteArray rangeHeader = headerValue(lines, QByteArrayLiteral("Range"));
+
     StreamEntry entry = m_entries.value(token);
     if ((entry.type == StreamType::LocalFile
          || entry.type == StreamType::GrowingLocalFile)
@@ -911,8 +930,13 @@ void LocalFileStreamServer::handleRequest(QTcpSocket *socket, const QByteArray &
 
         if (!entry.growingComplete) {
             if (m_lanClients.contains(socket)) {
-                qInfo() << "SailVideo Cast bridge:" << method
-                        << "progressive WebM; currently"
+                qInfo() << "SailVideo Cast bridge: growing stream"
+                        << entry.diagnosticId << method
+                        << "request; Range"
+                        << (rangeHeader.isEmpty()
+                            ? QByteArrayLiteral("<none>")
+                            : rangeHeader)
+                        << "currently"
                         << QFileInfo(entry.filePath).size() << "bytes";
             }
             startGrowingTransfer(socket,
@@ -940,7 +964,6 @@ void LocalFileStreamServer::handleRequest(QTcpSocket *socket, const QByteArray &
     qint64 end = qMax<qint64>(0, entry.size - 1);
     bool partial = false;
 
-    const QByteArray rangeHeader = headerValue(lines, QByteArrayLiteral("Range"));
     if (!rangeHeader.isEmpty()) {
         if (!parseRange(rangeHeader, entry.size, &start, &end)) {
             sendRangeNotSatisfiable(socket, entry.size);
@@ -950,10 +973,22 @@ void LocalFileStreamServer::handleRequest(QTcpSocket *socket, const QByteArray &
     }
 
     if (m_lanClients.contains(socket)) {
-        qInfo() << "SailVideo Cast bridge:" << method
-                << (partial ? "range" : "full")
-                << start << end << "of" << entry.size
-                << "mime" << entry.mimeType;
+        if (entry.diagnosticId > 0) {
+            qInfo() << "SailVideo Cast bridge: stream"
+                    << entry.diagnosticId << method
+                    << (partial ? "range" : "full")
+                    << start << end << "of" << entry.size
+                    << "Range"
+                    << (rangeHeader.isEmpty()
+                        ? QByteArrayLiteral("<none>")
+                        : rangeHeader)
+                    << "mime" << entry.mimeType;
+        } else {
+            qInfo() << "SailVideo Cast bridge:" << method
+                    << (partial ? "range" : "full")
+                    << start << end << "of" << entry.size
+                    << "mime" << entry.mimeType;
+        }
     }
 
     startTransfer(socket,
@@ -1474,6 +1509,11 @@ void LocalFileStreamServer::startGrowingTransfer(QTcpSocket *socket,
         return;
     }
 
+    qInfo() << "SailVideo Cast bridge: growing stream"
+            << entry.diagnosticId
+            << "transfer start; HEAD" << headOnly
+            << "buffered" << QFileInfo(entry.filePath).size() << "bytes";
+
     QByteArray response;
     response += "HTTP/1.1 200 OK\r\n";
     response += "Accept-Ranges: none\r\n";
@@ -1514,6 +1554,17 @@ void LocalFileStreamServer::closeTransfer(QTcpSocket *socket)
     Transfer *transfer = m_transfers.take(socket);
     if (!transfer) {
         return;
+    }
+
+    if (transfer->growing) {
+        const auto entryIt = m_entries.constFind(transfer->token);
+        qInfo() << "SailVideo Cast bridge: growing stream"
+                << (entryIt == m_entries.constEnd()
+                    ? quint64(0)
+                    : entryIt->diagnosticId)
+                << "transfer close; sent" << transfer->nextOffset
+                << "bytes; socketState"
+                << (socket ? int(socket->state()) : -1);
     }
 
     if (transfer->file) {

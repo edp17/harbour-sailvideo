@@ -112,6 +112,7 @@ private:
         QString fileName;
         QString mimeType;
         qint64 size = 0;
+        quint64 diagnosticId = 0;
         bool growingComplete = false;
         bool growingFailed = false;
 
@@ -210,6 +211,7 @@ private:
     QHash<QString, SmbSessionHolder *> m_smbSessions;
     QHash<quint64, QPointer<QTcpSocket> > m_smbRequestSockets;
     quint64 m_nextTransferId = 1;
+    quint64 m_nextGrowingStreamDiagnosticId = 1;
     QTimer m_growingPumpTimer;
     QTimer m_smbSessionCleanupTimer;
 };

@@ -22,6 +22,7 @@ class CastMediaPreparer : public QObject
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
+    Q_PROPERTY(qint64 timelineOffset READ timelineOffset NOTIFY timelineOffsetChanged)
 
 public:
     explicit CastMediaPreparer(const QString &storageDirectory = QString(),
@@ -30,15 +31,19 @@ public:
 
     bool busy() const;
     QString lastError() const;
+    qint64 timelineOffset() const;
 
     Q_INVOKABLE bool prepareAvi(const QString &inputUrl,
-                                const QString &sourceKey);
+                                const QString &sourceKey,
+                                qint64 startPositionMs = 0);
     Q_INVOKABLE void cancel();
+    Q_INVOKABLE void cancelPreservingOutput();
     Q_INVOKABLE void clearPreparedCache();
 
 signals:
     void busyChanged();
     void lastErrorChanged();
+    void timelineOffsetChanged();
     void transcodingStarted(const QString &sourceKey);
     void transcodeProgress(const QString &sourceKey, qint64 bytesWritten);
     void transcodeStreamReady(const QString &sourceKey,
@@ -60,6 +65,15 @@ private:
         TranscodeWebmMode
     };
 
+    enum SourceSeekPhase {
+        SourceSeekNone = 0,
+        SourceSeekWarmup,
+        SourceSeekPausing,
+        SourceSeekSettling,
+        SourceSeekPostSeek,
+        SourceSeekComplete
+    };
+
     static void demuxPadAddedThunk(GstElement *demux,
                                    GstPad *pad,
                                    gpointer userData);
@@ -77,9 +91,14 @@ private:
     bool linkPadThroughParser(GstPad *pad, const char *parserFactory);
     bool linkDecodedVideoPad(GstPad *pad);
     bool linkDecodedAudioPad(GstPad *pad);
+    bool linkSourceSeekWarmupPad(GstPad *pad, bool video);
+    bool activateTranscodeOutputAfterSeek(QString *errorMessage);
+    void processTranscodeSourceSeek();
+    void releaseSourceSeekWarmupRefs();
     bool discardPad(GstPad *pad);
 
     void requestTranscodeFallback(const QString &reason);
+    void cancelInternal(bool preserveOutput);
     void teardownPipeline();
     void finishSuccess();
     void finishFailure(const QString &message);
@@ -106,6 +125,14 @@ private:
     std::atomic<int> m_mode {NoPreparationMode};
     bool m_streamReadyEmitted = false;
     qint64 m_lastProgressBytes = 0;
+    qint64 m_requestedStartPositionMs = 0;
+    qint64 m_timelineOffset = 0;
+    SourceSeekPhase m_sourceSeekPhase = SourceSeekNone;
+    qint64 m_sourceSeekPhaseStartedMs = 0;
+    GstPad *m_sourceSeekVideoPad = nullptr;
+    GstPad *m_sourceSeekAudioPad = nullptr;
+    GstElement *m_sourceSeekVideoSink = nullptr;
+    GstElement *m_sourceSeekAudioSink = nullptr;
 
     QString m_lastError;
     QHash<QString, QString> m_preparedFiles;

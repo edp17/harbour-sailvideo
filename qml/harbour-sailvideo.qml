@@ -157,6 +157,7 @@ ApplicationWindow {
     property bool aviCastPending: false
     property string aviCastPendingMode: ""
     property string aviCastPendingSourceKey: ""
+    property string aviCastPendingMediaUrl: ""
     property string aviCastPendingDeviceName: ""
     property string aviCastPendingHost: ""
     property int aviCastPendingPort: 8009
@@ -166,6 +167,12 @@ ApplicationWindow {
     property bool aviCastStreamingStarted: false
     property bool aviCastProgressiveSession: false
     property string aviCastGrowingFileUrl: ""
+    property string aviCastRetiredGrowingFileUrl: ""
+    property int aviCastTimelineOffset: 0
+    property int aviCastSeekGeneration: 0
+    property int aviCastQueuedSeekTarget: -1
+    property string aviCastQueuedSeekKey: ""
+    property string aviCastQueuedSeekMediaUrl: ""
 
     property bool castMode: castRequested
                             || castManager.connected
@@ -370,12 +377,21 @@ ApplicationWindow {
 
     function playbackPosition() {
         if (videoCastActive) {
-            return Math.max(0, castManager.position)
+            var remotePosition = Math.max(0, castManager.position)
+            if (isAviVideo(currentMediaTitle, currentMediaUrl)) {
+                return Math.max(0, aviCastTimelineOffset + remotePosition)
+            }
+            return remotePosition
         }
         return Math.max(0, mediaPlayer.position)
     }
 
     function playbackDuration() {
+        if (videoCastActive
+                && isAviVideo(currentMediaTitle, currentMediaUrl)
+                && mediaPlayer.duration > 0) {
+            return Math.max(0, mediaPlayer.duration)
+        }
         if (videoCastActive && castManager.duration > 0) {
             return castManager.duration
         }
@@ -601,6 +617,7 @@ ApplicationWindow {
         aviCastPending = false
         aviCastPendingMode = ""
         aviCastPendingSourceKey = ""
+        aviCastPendingMediaUrl = ""
         aviCastPendingDeviceName = ""
         aviCastPendingHost = ""
         aviCastPendingPort = 8009
@@ -610,6 +627,12 @@ ApplicationWindow {
     }
 
     function releasePreparedAviCache() {
+        aviCastSeekPrepareTimer.stop()
+        aviCastQueuedSeekTarget = -1
+        aviCastQueuedSeekKey = ""
+        aviCastQueuedSeekMediaUrl = ""
+        aviCastSeekGeneration = 0
+
         if (aviCastGrowingFileUrl.length > 0) {
             localFileStreamServer.abortGrowingLocalFile(aviCastGrowingFileUrl)
         }
@@ -620,6 +643,11 @@ ApplicationWindow {
         aviCastStreamingStarted = false
         aviCastProgressiveSession = false
         aviCastGrowingFileUrl = ""
+        if (aviCastRetiredGrowingFileUrl.length > 0) {
+            localFileStreamServer.abortGrowingLocalFile(aviCastRetiredGrowingFileUrl)
+        }
+        aviCastRetiredGrowingFileUrl = ""
+        aviCastTimelineOffset = 0
         aviCastTranscoding = false
         if (aviCastPending) {
             resetPendingAviCast()
@@ -629,12 +657,21 @@ ApplicationWindow {
     function failPendingAviCast(message) {
         var shouldResume = aviCastResumeLocalOnFailure
         var failedTitle = currentMediaTitle
+        var failedSeek = aviCastPendingMode === "seek"
+        var failureText = message && String(message).length > 0
+                ? String(message)
+                : qsTr("This AVI could not be prepared for Chromecast.")
         resetPendingAviCast()
-        rejectUnsupportedCastVideo(
-                    failedTitle,
-                    message && String(message).length > 0
-                    ? String(message)
-                    : qsTr("This AVI could not be prepared for Chromecast."))
+
+        if (failedSeek && (castManager.connected || castManager.casting)) {
+            userSeekPending = false
+            playbackError = failureText
+            playbackStatus = qsTr("AVI seek preparation failed; keeping the previous Cast stream")
+            castManager.play()
+            return false
+        }
+
+        rejectUnsupportedCastVideo(failedTitle, failureText)
 
         if (shouldResume
                 && !castManager.connected
@@ -645,7 +682,7 @@ ApplicationWindow {
         return false
     }
 
-    function prepareAviCast(mode, deviceName, host, port, startPosition) {
+    function prepareAviCast(mode, deviceName, host, port, startPosition, preparationKey) {
         if (castMediaPreparer.busy) {
             if (aviCastPending && aviCastPendingSourceKey === currentMediaUrl) {
                 // The remux output is independent of the receiver. If the user
@@ -693,9 +730,15 @@ ApplicationWindow {
             lastKnownPosition = position
         }
 
+        var mediaSourceKey = currentMediaUrl
+        var prepKey = preparationKey && String(preparationKey).length > 0
+                ? String(preparationKey)
+                : mediaSourceKey
+
         aviCastPending = true
         aviCastPendingMode = mode
-        aviCastPendingSourceKey = currentMediaUrl
+        aviCastPendingSourceKey = prepKey
+        aviCastPendingMediaUrl = mediaSourceKey
         aviCastPendingDeviceName = cleanedValue(deviceName)
         aviCastPendingHost = cleanedValue(host)
         aviCastPendingPort = port > 0 ? port : 8009
@@ -713,7 +756,7 @@ ApplicationWindow {
             mediaPlayer.pause()
         }
 
-        if (!castMediaPreparer.prepareAvi(inputUrl, currentMediaUrl)) {
+        if (!castMediaPreparer.prepareAvi(inputUrl, prepKey, position)) {
             return failPendingAviCast(castMediaPreparer.lastError)
         }
 
@@ -724,7 +767,7 @@ ApplicationWindow {
         if (!aviCastPending
                 || aviCastStreamingStarted
                 || sourceKey !== aviCastPendingSourceKey
-                || sourceKey !== currentMediaUrl) {
+                || aviCastPendingMediaUrl !== currentMediaUrl) {
             return
         }
 
@@ -749,11 +792,13 @@ ApplicationWindow {
         aviCastProgressiveSession = true
         aviCastGrowingFileUrl = fileUrl
 
-        // A growing WebM has no final index/duration yet, so the first
-        // progressive checkpoint starts at the beginning.
+        // A growing WebM has no final index/duration yet. When the preparer
+        // source-seeks first, WebM time 0 represents the requested AVI source
+        // position, tracked separately in aviCastTimelineOffset.
         var streamPosition = 0
+        var preparedTimelineOffset = Math.max(0, castMediaPreparer.timelineOffset)
 
-        if (mode === "replace") {
+        if (mode === "replace" || mode === "seek") {
             var requestedVolume = castManager.mediaInfoKnown && !castManager.imageMedia
                     ? castManager.volumePercent
                     : playbackVolumePercent
@@ -769,6 +814,20 @@ ApplicationWindow {
                 aviCastStreamingStarted = false
                 localFileStreamServer.abortGrowingLocalFile(fileUrl)
                 failPendingAviCast(castManager.lastError)
+                return
+            }
+
+            aviCastTimelineOffset = preparedTimelineOffset
+            userSeekPending = false
+            playbackError = ""
+            playbackStatus = mode === "seek"
+                    ? qsTr("Seeking on %1").arg(
+                          castManager.deviceName.length > 0
+                          ? castManager.deviceName
+                          : qsTr("Chromecast"))
+                    : qsTr("Starting transcoded AVI on Chromecast")
+            if (aviCastRetiredGrowingFileUrl.length > 0) {
+                aviCastRetiredStreamCleanupTimer.restart()
             }
             return
         }
@@ -781,7 +840,8 @@ ApplicationWindow {
         castResumeLocalAfterDisconnect = false
         castDisconnectOnly = false
         castRejoinPending = false
-        castReturnPosition = streamPosition
+        aviCastTimelineOffset = preparedTimelineOffset
+        castReturnPosition = preparedTimelineOffset + streamPosition
         playerSuspended = false
         playbackError = ""
         playbackStatus = qsTr("Connecting to %1").arg(
@@ -816,7 +876,7 @@ ApplicationWindow {
         if (!aviCastPending
                 || !aviCastStreamingStarted
                 || sourceKey !== aviCastPendingSourceKey
-                || sourceKey !== currentMediaUrl) {
+                || aviCastPendingMediaUrl !== currentMediaUrl) {
             return false
         }
 
@@ -862,7 +922,7 @@ ApplicationWindow {
     function completePreparedAviCast(sourceKey, fileUrl, contentType) {
         if (!aviCastPending
                 || sourceKey !== aviCastPendingSourceKey
-                || sourceKey !== currentMediaUrl) {
+                || aviCastPendingMediaUrl !== currentMediaUrl) {
             return
         }
 
@@ -875,7 +935,10 @@ ApplicationWindow {
         var deviceName = aviCastPendingDeviceName
         var host = aviCastPendingHost
         var port = aviCastPendingPort
-        var position = aviCastPendingPosition
+        var preparedTimelineOffset = Math.max(0, castMediaPreparer.timelineOffset)
+        var position = preparedTimelineOffset > 0
+                ? 0
+                : aviCastPendingPosition
         var resumeOnFailure = aviCastResumeLocalOnFailure
 
         var remoteUrl = localFileStreamServer.lanStreamUrlForLocalFile(
@@ -906,6 +969,12 @@ ApplicationWindow {
                                                     requestedVolume)) {
                 rejectUnsupportedCastVideo(currentMediaTitle,
                                            castManager.lastError)
+                return
+            }
+            aviCastTimelineOffset = preparedTimelineOffset
+            userSeekPending = false
+            if (aviCastRetiredGrowingFileUrl.length > 0) {
+                aviCastRetiredStreamCleanupTimer.restart()
             }
             return
         }
@@ -920,7 +989,8 @@ ApplicationWindow {
         castResumeLocalAfterDisconnect = false
         castDisconnectOnly = false
         castRejoinPending = false
-        castReturnPosition = position
+        aviCastTimelineOffset = preparedTimelineOffset
+        castReturnPosition = preparedTimelineOffset + position
         playerSuspended = false
         playbackError = ""
         playbackStatus = qsTr("Connecting to %1").arg(
@@ -1520,6 +1590,86 @@ ApplicationWindow {
         suspendPlayback()
     }
 
+    function requestAviCastSeek(targetPosition) {
+        if (!videoCastActive
+                || !castManager.connected
+                || !isAviVideo(currentMediaTitle, currentMediaUrl)) {
+            return false
+        }
+
+        var target = Math.max(0, Math.round(targetPosition))
+        var inputUrl = cleanedValue(currentPlaybackUrl)
+        if (inputUrl.length === 0) {
+            inputUrl = cleanedValue(currentMediaUrl)
+        }
+        if (inputUrl.length === 0) {
+            playbackError = qsTr("The AVI playback source is unavailable.")
+            playbackStatus = playbackError
+            return false
+        }
+
+        if (castManager.playing) {
+            castManager.pause()
+        }
+
+        aviCastRetiredStreamCleanupTimer.stop()
+
+        if (aviCastRetiredGrowingFileUrl.length > 0
+                && aviCastRetiredGrowingFileUrl !== aviCastGrowingFileUrl) {
+            localFileStreamServer.abortGrowingLocalFile(
+                        aviCastRetiredGrowingFileUrl)
+            aviCastRetiredGrowingFileUrl = ""
+        }
+
+        if (aviCastGrowingFileUrl.length > 0) {
+            aviCastRetiredGrowingFileUrl = aviCastGrowingFileUrl
+        }
+
+        if (castMediaPreparer.busy) {
+            console.log("SailVideo AVI Cast seek: stopping active generation before next seek")
+            castMediaPreparer.cancelPreservingOutput()
+        }
+
+        resetPendingAviCast()
+        aviCastSeekGeneration += 1
+        var seekKey = currentMediaUrl
+                + "|castseek|" + aviCastSeekGeneration
+                + "|" + target
+
+        userSeekPending = true
+        playbackError = ""
+        playbackStatus = qsTr("Preparing AVI seek for Chromecast")
+        lastKnownPosition = target
+
+        if (aviCastSeekGeneration === 1) {
+            console.log("SailVideo AVI Cast seek: first generation uses proven immediate r11 path")
+            var started = prepareAviCast("seek",
+                                         castManager.deviceName,
+                                         castManager.host,
+                                         castManager.port,
+                                         target,
+                                         seekKey)
+            if (!started) {
+                userSeekPending = false
+                if (castManager.connected) {
+                    castManager.play()
+                }
+            }
+            return started
+        }
+
+        aviCastQueuedSeekTarget = target
+        aviCastQueuedSeekKey = seekKey
+        aviCastQueuedSeekMediaUrl = currentMediaUrl
+
+        console.log("SailVideo AVI Cast seek: generation "
+                    + aviCastSeekGeneration
+                    + " queued for " + target
+                    + " ms; allowing old pipeline to settle")
+        aviCastSeekPrepareTimer.restart()
+        return true
+    }
+
     function requestSeek(targetPosition, forceResumeAfterSeek) {
         if (!hasMedia || userSeekPending || aviLocalSeekPending) {
             return
@@ -1548,8 +1698,11 @@ ApplicationWindow {
         }
 
         if (videoCastActive) {
-            if (aviCastProgressiveSession) {
-                playbackStatus = qsTr("AVI is still being prepared. Seeking will be enabled automatically when preparation finishes.")
+            if (isAviVideo(currentMediaTitle, currentMediaUrl)
+                    && (aviCastProgressiveSession || aviCastTimelineOffset > 0)) {
+                lastKnownPosition = safeTarget
+                playbackHistory.updatePosition(currentMediaUrl, duration, safeTarget)
+                requestAviCastSeek(safeTarget)
                 return
             }
 
@@ -1592,8 +1745,10 @@ ApplicationWindow {
         }
 
         if (videoCastActive) {
-            if (aviCastProgressiveSession) {
-                playbackStatus = qsTr("AVI is still being prepared. Restart will be available when preparation finishes.")
+            if (isAviVideo(currentMediaTitle, currentMediaUrl)
+                    && (aviCastProgressiveSession || aviCastTimelineOffset > 0)) {
+                playbackHistory.updatePosition(currentMediaUrl, playbackDuration(), 0)
+                requestAviCastSeek(0)
                 return
             }
 
@@ -2972,8 +3127,8 @@ ApplicationWindow {
 
         onPositionChanged: {
             if (videoCastActive
-                    && castManager.position > 0) {
-                lastKnownPosition = castManager.position
+                    && castManager.position >= 0) {
+                lastKnownPosition = playbackPosition()
             }
         }
 
@@ -3155,6 +3310,61 @@ ApplicationWindow {
                         + qsTr("The decoder rejected this file. It may be damaged, incomplete, or encoded with an unsupported codec/profile.")
             }
             appWindow.updatePlaybackStatus()
+        }
+    }
+
+    Timer {
+        id: aviCastSeekPrepareTimer
+        interval: 1000
+        repeat: false
+        onTriggered: {
+            var target = appWindow.aviCastQueuedSeekTarget
+            var seekKey = appWindow.aviCastQueuedSeekKey
+            var mediaUrl = appWindow.aviCastQueuedSeekMediaUrl
+
+            appWindow.aviCastQueuedSeekTarget = -1
+            appWindow.aviCastQueuedSeekKey = ""
+            appWindow.aviCastQueuedSeekMediaUrl = ""
+
+            if (target < 0
+                    || seekKey.length === 0
+                    || mediaUrl.length === 0
+                    || mediaUrl !== appWindow.currentMediaUrl
+                    || !appWindow.videoCastActive
+                    || !castManager.connected) {
+                appWindow.userSeekPending = false
+                return
+            }
+
+            console.log("SailVideo AVI Cast seek: starting settled generation at "
+                        + target + " ms")
+
+            var started = appWindow.prepareAviCast(
+                        "seek",
+                        castManager.deviceName,
+                        castManager.host,
+                        castManager.port,
+                        target,
+                        seekKey)
+            if (!started) {
+                appWindow.userSeekPending = false
+                if (castManager.connected) {
+                    castManager.play()
+                }
+            }
+        }
+    }
+
+    Timer {
+        id: aviCastRetiredStreamCleanupTimer
+        interval: 4000
+        repeat: false
+        onTriggered: {
+            if (appWindow.aviCastRetiredGrowingFileUrl.length > 0) {
+                localFileStreamServer.abortGrowingLocalFile(
+                            appWindow.aviCastRetiredGrowingFileUrl)
+                appWindow.aviCastRetiredGrowingFileUrl = ""
+            }
         }
     }
 

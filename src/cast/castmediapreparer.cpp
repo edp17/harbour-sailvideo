@@ -9,6 +9,7 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDebug>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -125,6 +126,11 @@ QString CastMediaPreparer::lastError() const
     return m_lastError;
 }
 
+qint64 CastMediaPreparer::timelineOffset() const
+{
+    return m_timelineOffset;
+}
+
 QString CastMediaPreparer::cacheDirectory() const
 {
     return QDir(m_storageDirectory).filePath(QStringLiteral("cast-remux-cache"));
@@ -198,7 +204,8 @@ QString CastMediaPreparer::contentTypeForPath(const QString &path) const
 }
 
 bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
-                                   const QString &sourceKey)
+                                   const QString &sourceKey,
+                                   qint64 startPositionMs)
 {
     if (m_busy.load()) {
         setLastError(tr("Another AVI file is already being prepared for Chromecast."));
@@ -214,6 +221,15 @@ bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
     const QString key = sourceKey.trimmed().isEmpty()
             ? normalized
             : sourceKey.trimmed();
+
+    m_requestedStartPositionMs = qMax<qint64>(0, startPositionMs);
+    if (m_timelineOffset != 0) {
+        m_timelineOffset = 0;
+        emit timelineOffsetChanged();
+    }
+    m_sourceSeekPhase = SourceSeekNone;
+    m_sourceSeekPhaseStartedMs = 0;
+    releaseSourceSeekWarmupRefs();
 
     const QString cachedPath = m_preparedFiles.value(key);
     if (!cachedPath.isEmpty()) {
@@ -271,6 +287,16 @@ bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
 
 void CastMediaPreparer::cancel()
 {
+    cancelInternal(false);
+}
+
+void CastMediaPreparer::cancelPreservingOutput()
+{
+    cancelInternal(true);
+}
+
+void CastMediaPreparer::cancelInternal(bool preserveOutput)
+{
     if (!m_busy.load() && !m_pipeline) {
         return;
     }
@@ -282,7 +308,7 @@ void CastMediaPreparer::cancel()
     m_lastProgressBytes = 0;
     teardownPipeline();
 
-    if (!m_partPath.isEmpty()) {
+    if (!preserveOutput && !m_partPath.isEmpty()) {
         QFile::remove(m_partPath);
     }
 
@@ -292,6 +318,9 @@ void CastMediaPreparer::cancel()
     m_partPath.clear();
     m_videoLinked.store(false);
     m_audioLinked.store(false);
+    m_requestedStartPositionMs = 0;
+    m_sourceSeekPhase = SourceSeekNone;
+    m_sourceSeekPhaseStartedMs = 0;
 }
 
 void CastMediaPreparer::clearPreparedCache()
@@ -474,8 +503,20 @@ bool CastMediaPreparer::startTranscodePipeline(QString *errorMessage)
         return false;
     }
 
-    if (!configureOutput(TranscodeWebmMode, errorMessage)) {
-        return false;
+    const bool needsSourceSeek = m_requestedStartPositionMs >= 1000;
+    if (!needsSourceSeek) {
+        if (!configureOutput(TranscodeWebmMode, errorMessage)) {
+            return false;
+        }
+        m_sourceSeekPhase = SourceSeekComplete;
+    } else {
+        // Warm the actual AVI decoder first with fakesinks. Device testing of
+        // QtMultimedia showed that avidemux seeking is reliable once the
+        // streaming pipeline has first been paused and allowed to settle.
+        m_sourceSeekPhase = SourceSeekWarmup;
+        m_sourceSeekPhaseStartedMs = QDateTime::currentMSecsSinceEpoch();
+        qInfo() << "SailVideo Cast transcode: warming AVI source before seek to"
+                << m_requestedStartPositionMs << "ms";
     }
 
     const QByteArray uri = m_inputUrl.toUtf8();
@@ -629,6 +670,32 @@ void CastMediaPreparer::handleDecodedPadAdded(GstElement *decodebin,
     const QString name = capsName(caps);
     const QString debugCaps = capsDebugString(caps);
 
+    if (m_requestedStartPositionMs >= 1000
+            && m_sourceSeekPhase != SourceSeekComplete) {
+        if (name.startsWith(QStringLiteral("video/x-raw"))) {
+            if (!m_sourceSeekVideoPad
+                    && linkSourceSeekWarmupPad(pad, true)) {
+                qInfo() << "SailVideo Cast transcode: AVI video warmup pad ready";
+            } else if (m_sourceSeekVideoPad) {
+                discardPad(pad);
+            }
+        } else if (name.startsWith(QStringLiteral("audio/x-raw"))) {
+            if (!m_sourceSeekAudioPad
+                    && linkSourceSeekWarmupPad(pad, false)) {
+                qInfo() << "SailVideo Cast transcode: AVI audio warmup pad ready";
+            } else if (m_sourceSeekAudioPad) {
+                discardPad(pad);
+            }
+        } else {
+            discardPad(pad);
+        }
+
+        if (caps) {
+            gst_caps_unref(caps);
+        }
+        return;
+    }
+
     if (name.startsWith(QStringLiteral("video/x-raw"))) {
         if (m_videoLinked.load()) {
             discardPad(pad);
@@ -666,6 +733,252 @@ void CastMediaPreparer::handleDecodedPadAdded(GstElement *decodebin,
     if (caps) {
         gst_caps_unref(caps);
     }
+}
+
+bool CastMediaPreparer::linkSourceSeekWarmupPad(GstPad *pad, bool video)
+{
+    if (!m_pipeline || !pad) {
+        return false;
+    }
+
+    GstElement *sink = gst_element_factory_make("fakesink", nullptr);
+    if (!sink) {
+        return false;
+    }
+
+    g_object_set(G_OBJECT(sink),
+                 "sync", FALSE,
+                 "async", FALSE,
+                 nullptr);
+    gst_bin_add(GST_BIN(m_pipeline), sink);
+    gst_element_sync_state_with_parent(sink);
+
+    GstPad *sinkPad = gst_element_get_static_pad(sink, "sink");
+    if (!sinkPad) {
+        gst_element_set_state(sink, GST_STATE_NULL);
+        gst_bin_remove(GST_BIN(m_pipeline), sink);
+        return false;
+    }
+
+    const GstPadLinkReturn result = gst_pad_link(pad, sinkPad);
+    gst_object_unref(sinkPad);
+    if (result != GST_PAD_LINK_OK) {
+        gst_element_set_state(sink, GST_STATE_NULL);
+        gst_bin_remove(GST_BIN(m_pipeline), sink);
+        return false;
+    }
+
+    gst_object_ref(pad);
+    if (video) {
+        m_sourceSeekVideoPad = pad;
+        m_sourceSeekVideoSink = sink;
+        m_sourceSeekPhaseStartedMs = QDateTime::currentMSecsSinceEpoch();
+    } else {
+        m_sourceSeekAudioPad = pad;
+        m_sourceSeekAudioSink = sink;
+    }
+    return true;
+}
+
+bool CastMediaPreparer::activateTranscodeOutputAfterSeek(QString *errorMessage)
+{
+    if (!m_pipeline || !m_sourceSeekVideoPad) {
+        if (errorMessage) {
+            *errorMessage = tr("The AVI video stream was not ready after source seeking.");
+        }
+        return false;
+    }
+
+    if (!configureOutput(TranscodeWebmMode, errorMessage)) {
+        return false;
+    }
+    syncWithParent(QList<GstElement *>() << m_mux << m_sink);
+
+    auto replaceWarmupSink = [this](GstPad *pad,
+                                    GstElement *sink,
+                                    bool video) -> bool {
+        if (!pad) {
+            return !video;
+        }
+
+        if (sink) {
+            GstPad *sinkPad = gst_element_get_static_pad(sink, "sink");
+            if (sinkPad) {
+                gst_pad_unlink(pad, sinkPad);
+                gst_object_unref(sinkPad);
+            }
+            gst_element_set_state(sink, GST_STATE_NULL);
+            gst_bin_remove(GST_BIN(m_pipeline), sink);
+        }
+
+        return video ? linkDecodedVideoPad(pad)
+                     : linkDecodedAudioPad(pad);
+    };
+
+    if (!replaceWarmupSink(m_sourceSeekVideoPad,
+                           m_sourceSeekVideoSink,
+                           true)) {
+        if (errorMessage) {
+            *errorMessage = tr("The seeked AVI video could not be connected to the VP8 encoder.");
+        }
+        return false;
+    }
+    m_videoLinked.store(true);
+
+    if (m_sourceSeekAudioPad) {
+        if (!replaceWarmupSink(m_sourceSeekAudioPad,
+                               m_sourceSeekAudioSink,
+                               false)) {
+            if (errorMessage) {
+                *errorMessage = tr("The seeked AVI audio could not be connected to the Vorbis encoder.");
+            }
+            return false;
+        }
+        m_audioLinked.store(true);
+    }
+
+    m_sourceSeekVideoSink = nullptr;
+    m_sourceSeekAudioSink = nullptr;
+    if (m_sourceSeekVideoPad) {
+        gst_object_unref(m_sourceSeekVideoPad);
+        m_sourceSeekVideoPad = nullptr;
+    }
+    if (m_sourceSeekAudioPad) {
+        gst_object_unref(m_sourceSeekAudioPad);
+        m_sourceSeekAudioPad = nullptr;
+    }
+
+    if (m_timelineOffset != m_requestedStartPositionMs) {
+        m_timelineOffset = m_requestedStartPositionMs;
+        emit timelineOffsetChanged();
+    }
+
+    m_sourceSeekPhase = SourceSeekComplete;
+    m_sourceSeekPhaseStartedMs = QDateTime::currentMSecsSinceEpoch();
+
+    const GstStateChangeReturn state =
+            gst_element_set_state(m_pipeline, GST_STATE_PLAYING);
+    if (state == GST_STATE_CHANGE_FAILURE) {
+        if (errorMessage) {
+            *errorMessage = tr("GStreamer could not resume AVI transcoding after seeking.");
+        }
+        return false;
+    }
+
+    qInfo() << "SailVideo Cast transcode: source seek ready; WebM timeline 0 maps to AVI"
+            << m_timelineOffset << "ms";
+    return true;
+}
+
+void CastMediaPreparer::processTranscodeSourceSeek()
+{
+    if (!m_busy.load()
+            || m_mode.load() != TranscodeWebmMode
+            || !m_pipeline
+            || m_requestedStartPositionMs < 1000
+            || m_sourceSeekPhase == SourceSeekComplete
+            || m_sourceSeekPhase == SourceSeekNone) {
+        return;
+    }
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+    if (m_sourceSeekPhase == SourceSeekWarmup) {
+        if (!m_sourceSeekVideoPad) {
+            return;
+        }
+
+        if (now - m_sourceSeekPhaseStartedMs < 650) {
+            return;
+        }
+
+        qInfo() << "SailVideo Cast transcode: pausing warmed AVI pipeline before source seek";
+        const GstStateChangeReturn state =
+                gst_element_set_state(m_pipeline, GST_STATE_PAUSED);
+        if (state == GST_STATE_CHANGE_FAILURE) {
+            finishFailure(tr("The AVI transcode pipeline could not pause before seeking."));
+            return;
+        }
+        m_sourceSeekPhase = SourceSeekPausing;
+        m_sourceSeekPhaseStartedMs = now;
+        return;
+    }
+
+    if (m_sourceSeekPhase == SourceSeekPausing) {
+        GstState state = GST_STATE_VOID_PENDING;
+        GstState pending = GST_STATE_VOID_PENDING;
+        gst_element_get_state(m_pipeline, &state, &pending, 0);
+
+        if (state == GST_STATE_PAUSED) {
+            qInfo() << "SailVideo Cast transcode: PausedState reached before source seek";
+            m_sourceSeekPhase = SourceSeekSettling;
+            m_sourceSeekPhaseStartedMs = now;
+            return;
+        }
+
+        if (now - m_sourceSeekPhaseStartedMs > 5000) {
+            finishFailure(tr("The AVI transcode pipeline did not pause in time for seeking."));
+        }
+        return;
+    }
+
+    if (m_sourceSeekPhase == SourceSeekSettling) {
+        if (now - m_sourceSeekPhaseStartedMs < 500) {
+            return;
+        }
+
+        qInfo() << "SailVideo Cast transcode: issuing paused source seek to"
+                << m_requestedStartPositionMs << "ms";
+
+        const gboolean seeked = gst_element_seek_simple(
+                    m_pipeline,
+                    GST_FORMAT_TIME,
+                    static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH
+                                              | GST_SEEK_FLAG_KEY_UNIT),
+                    m_requestedStartPositionMs * GST_MSECOND);
+        if (!seeked) {
+            finishFailure(tr("The AVI source could not seek to the requested Chromecast position."));
+            return;
+        }
+
+        m_sourceSeekPhase = SourceSeekPostSeek;
+        m_sourceSeekPhaseStartedMs = now;
+        return;
+    }
+
+    if (m_sourceSeekPhase == SourceSeekPostSeek) {
+        if (now - m_sourceSeekPhaseStartedMs < 650) {
+            return;
+        }
+
+        gint64 position = GST_CLOCK_TIME_NONE;
+        if (gst_element_query_position(m_pipeline,
+                                       GST_FORMAT_TIME,
+                                       &position)
+                && position != GST_CLOCK_TIME_NONE) {
+            qInfo() << "SailVideo Cast transcode: paused source reports"
+                    << (position / GST_MSECOND) << "ms after seek";
+        }
+
+        QString error;
+        if (!activateTranscodeOutputAfterSeek(&error)) {
+            finishFailure(error);
+        }
+    }
+}
+
+void CastMediaPreparer::releaseSourceSeekWarmupRefs()
+{
+    if (m_sourceSeekVideoPad) {
+        gst_object_unref(m_sourceSeekVideoPad);
+        m_sourceSeekVideoPad = nullptr;
+    }
+    if (m_sourceSeekAudioPad) {
+        gst_object_unref(m_sourceSeekAudioPad);
+        m_sourceSeekAudioPad = nullptr;
+    }
+    m_sourceSeekVideoSink = nullptr;
+    m_sourceSeekAudioSink = nullptr;
 }
 
 bool CastMediaPreparer::linkPadThroughParser(GstPad *pad,
@@ -980,7 +1293,17 @@ void CastMediaPreparer::pollBus()
         return;
     }
 
-    if (m_mode.load() == TranscodeWebmMode && !m_partPath.isEmpty()) {
+    if (m_mode.load() == TranscodeWebmMode
+            && m_sourceSeekPhase != SourceSeekComplete) {
+        processTranscodeSourceSeek();
+        if (!m_busy.load()) {
+            return;
+        }
+    }
+
+    if (m_mode.load() == TranscodeWebmMode
+            && m_sourceSeekPhase == SourceSeekComplete
+            && !m_partPath.isEmpty()) {
         const QFileInfo growingFile(m_partPath);
         const qint64 bytes = growingFile.exists() ? growingFile.size() : 0;
 
@@ -1096,7 +1419,9 @@ void CastMediaPreparer::finishSuccess()
         }
     }
 
-    m_preparedFiles.insert(sourceKey, outputPath);
+    if (m_timelineOffset == 0) {
+        m_preparedFiles.insert(sourceKey, outputPath);
+    }
     setLastError(QString());
 
     const QString fileUrl = QUrl::fromLocalFile(outputPath).toString();
@@ -1139,6 +1464,10 @@ void CastMediaPreparer::teardownPipeline()
         gst_object_unref(m_pipeline);
         m_pipeline = nullptr;
     }
+
+    releaseSourceSeekWarmupRefs();
+    m_sourceSeekPhase = SourceSeekNone;
+    m_sourceSeekPhaseStartedMs = 0;
 
     m_source = nullptr;
     m_demux = nullptr;

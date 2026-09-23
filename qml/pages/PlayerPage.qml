@@ -35,6 +35,14 @@ Page {
     property real videoAspectRatio: 16.0 / 9.0
     property int aspectRefreshAttempts: 0
 
+    property bool seekInteractionActive: false
+    property bool seekCommitVisualPending: false
+    property real seekPreviewFraction: 0.0
+    property int seekPreviewPosition: 0
+    property bool seekVisualActive: seekInteractionActive
+                                    || (seekCommitVisualPending
+                                        && appWindow.userSeekPending)
+
     function leavePlayer() {
         if (leavingPage) {
             return
@@ -146,6 +154,54 @@ Page {
                                            appWindow.playbackPosition() + appWindow.skipMilliseconds()))
         }
         controlsHideTimer.restart()
+    }
+
+    function updateSeekPreview(pointerX, barWidth) {
+        var duration = appWindow.playbackDuration()
+        if (duration <= 0 || barWidth <= 0) {
+            return false
+        }
+
+        var boundedX = Math.max(0, Math.min(barWidth, pointerX))
+        seekPreviewFraction = boundedX / barWidth
+        seekPreviewPosition = Math.round(duration * seekPreviewFraction)
+        return true
+    }
+
+    function beginSeekPreview(pointerX, barWidth) {
+        if (!updateSeekPreview(pointerX, barWidth)) {
+            return false
+        }
+
+        seekCommitVisualPending = false
+        seekInteractionActive = true
+        controlsVisible = true
+        controlsHideTimer.stop()
+        return true
+    }
+
+    function commitSeekPreview(pointerX, barWidth) {
+        if (!seekInteractionActive) {
+            return
+        }
+
+        updateSeekPreview(pointerX, barWidth)
+        seekInteractionActive = false
+        seekCommitVisualPending = true
+        appWindow.requestSeek(seekPreviewPosition)
+
+        if (!appWindow.userSeekPending) {
+            seekCommitVisualPending = false
+            controlsHideTimer.restart()
+        }
+    }
+
+    function cancelSeekPreview() {
+        seekInteractionActive = false
+        seekCommitVisualPending = false
+        if (controlsVisible) {
+            controlsHideTimer.restart()
+        }
     }
 
     Rectangle {
@@ -671,8 +727,34 @@ Page {
             }
 
             Item {
+                id: seekBarContainer
+
                 width: parent.width
                 height: Theme.paddingLarge
+
+                Rectangle {
+                    id: seekPreviewBubble
+
+                    visible: page.seekVisualActive
+                    z: 3
+                    height: seekPreviewLabel.implicitHeight + 2 * Theme.paddingSmall
+                    width: seekPreviewLabel.implicitWidth + 2 * Theme.paddingMedium
+                    radius: Theme.paddingSmall
+                    color: "#dd000000"
+                    y: seekBackground.y - height - Theme.paddingSmall
+                    x: Math.max(0,
+                                Math.min(seekBarContainer.width - width,
+                                         page.seekPreviewFraction
+                                         * seekBarContainer.width - width / 2))
+
+                    Label {
+                        id: seekPreviewLabel
+                        anchors.centerIn: parent
+                        text: appWindow.formatTime(page.seekPreviewPosition)
+                        color: Theme.highlightColor
+                        font.pixelSize: Theme.fontSizeSmall
+                    }
+                }
 
                 Rectangle {
                     id: seekBackground
@@ -682,39 +764,77 @@ Page {
                         right: parent.right
                         verticalCenter: parent.verticalCenter
                     }
-                    height: Math.max(Theme.paddingSmall / 2, 3)
+                    height: page.seekVisualActive
+                            ? Math.max(Theme.paddingMedium, 10)
+                            : Math.max(Theme.paddingSmall / 2, 3)
                     radius: height / 2
                     color: "#66ffffff"
 
+                    Behavior on height {
+                        NumberAnimation { duration: 100 }
+                    }
+
                     Rectangle {
-                        width: appWindow.playbackDuration() > 0
-                               ? parent.width * appWindow.playbackPosition()
-                                 / appWindow.playbackDuration()
-                               : 0
+                        id: seekPlayedFill
+
+                        width: {
+                            if (appWindow.playbackDuration() <= 0) {
+                                return 0
+                            }
+                            var position = page.seekVisualActive
+                                    ? page.seekPreviewPosition
+                                    : appWindow.playbackPosition()
+                            return parent.width
+                                    * Math.max(0,
+                                               Math.min(appWindow.playbackDuration(),
+                                                        position))
+                                    / appWindow.playbackDuration()
+                        }
                         height: parent.height
                         radius: height / 2
                         color: Theme.highlightColor
                     }
 
+                    Rectangle {
+                        id: seekPreviewThumb
+
+                        visible: page.seekVisualActive
+                        z: 2
+                        width: Math.max(seekBackground.height + Theme.paddingSmall,
+                                        Theme.paddingMedium * 2)
+                        height: width
+                        radius: width / 2
+                        color: Theme.highlightColor
+                        x: Math.max(-width / 2,
+                                    Math.min(seekBackground.width - width / 2,
+                                             page.seekPreviewFraction
+                                             * seekBackground.width - width / 2))
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
                     MouseArea {
+                        id: seekTouchArea
+
                         anchors {
                             fill: parent
                             topMargin: -Theme.paddingLarge
                             bottomMargin: -Theme.paddingLarge
                         }
+                        preventStealing: true
 
-                        function seekToPointer(mouseX) {
-                            if (appWindow.playbackDuration() <= 0) {
-                                return
-                            }
-
-                            var boundedX = Math.max(0, Math.min(width, mouseX))
-                            var target = Math.round(
-                                appWindow.playbackDuration() * boundedX / width)
-                            appWindow.requestSeek(target)
+                        onPressed: {
+                            mouse.accepted = true
+                            page.beginSeekPreview(mouse.x, width)
                         }
 
-                        onReleased: seekToPointer(mouse.x)
+                        onPositionChanged: {
+                            if (pressed && page.seekInteractionActive) {
+                                page.updateSeekPreview(mouse.x, width)
+                            }
+                        }
+
+                        onReleased: page.commitSeekPreview(mouse.x, width)
+                        onCanceled: page.cancelSeekPreview()
                     }
                 }
             }
@@ -735,9 +855,10 @@ Page {
 
                 Label {
                     anchors.centerIn: parent
-                    visible: (!appWindow.videoCastActive && appWindow.pendingResumeSeek)
-                             || appWindow.userSeekPending
-                    text: appWindow.userSeekPending ? qsTr("Seeking") : qsTr("Resuming")
+                    visible: !appWindow.videoCastActive
+                             && appWindow.pendingResumeSeek
+                             && !appWindow.userSeekPending
+                    text: qsTr("Resuming")
                     color: Theme.highlightColor
                     font.pixelSize: Theme.fontSizeExtraSmall
                 }
@@ -774,6 +895,21 @@ Page {
         onTriggered: {
             if (appWindow.playbackIsPlaying() && !castPulleyMenu.active) {
                 page.controlsVisible = false
+            }
+        }
+    }
+
+    Connections {
+        target: appWindow
+
+        onUserSeekPendingChanged: {
+            if (!appWindow.userSeekPending
+                    && !page.seekInteractionActive
+                    && page.seekCommitVisualPending) {
+                page.seekCommitVisualPending = false
+                if (page.controlsVisible) {
+                    controlsHideTimer.restart()
+                }
             }
         }
     }

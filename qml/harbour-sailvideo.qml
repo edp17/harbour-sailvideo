@@ -146,6 +146,7 @@ ApplicationWindow {
     property bool videoCastActive: castMode && !castActivePicture
 
     property int castReturnPosition: 0
+    property int castEstimatedPosition: 0
     property bool castUsesLanBridge: false
     property string castLastDeviceName: ""
     property string castLastHost: ""
@@ -375,13 +376,17 @@ ApplicationWindow {
         return bytes + " B"
     }
 
+    function reportedCastPlaybackPosition() {
+        var remotePosition = Math.max(0, castManager.position)
+        if (isAviVideo(currentMediaTitle, currentMediaUrl)) {
+            return Math.max(0, aviCastTimelineOffset + remotePosition)
+        }
+        return remotePosition
+    }
+
     function playbackPosition() {
         if (videoCastActive) {
-            var remotePosition = Math.max(0, castManager.position)
-            if (isAviVideo(currentMediaTitle, currentMediaUrl)) {
-                return Math.max(0, aviCastTimelineOffset + remotePosition)
-            }
-            return remotePosition
+            return Math.max(0, castEstimatedPosition)
         }
         return Math.max(0, mediaPlayer.position)
     }
@@ -831,6 +836,7 @@ ApplicationWindow {
             }
 
             aviCastTimelineOffset = preparedTimelineOffset
+            castEstimatedPosition = preparedTimelineOffset + streamPosition
             userSeekPending = false
             playbackError = ""
             playbackStatus = mode === "seek"
@@ -854,6 +860,7 @@ ApplicationWindow {
         castDisconnectOnly = false
         castRejoinPending = false
         aviCastTimelineOffset = preparedTimelineOffset
+        castEstimatedPosition = preparedTimelineOffset + streamPosition
         castReturnPosition = preparedTimelineOffset + streamPosition
         playerSuspended = false
         playbackError = ""
@@ -985,6 +992,7 @@ ApplicationWindow {
                 return
             }
             aviCastTimelineOffset = preparedTimelineOffset
+            castEstimatedPosition = preparedTimelineOffset + position
             userSeekPending = false
             if (aviCastRetiredGrowingFileUrl.length > 0) {
                 aviCastRetiredStreamCleanupTimer.restart()
@@ -1003,6 +1011,7 @@ ApplicationWindow {
         castDisconnectOnly = false
         castRejoinPending = false
         aviCastTimelineOffset = preparedTimelineOffset
+        castEstimatedPosition = preparedTimelineOffset + position
         castReturnPosition = preparedTimelineOffset + position
         playerSuspended = false
         playbackError = ""
@@ -1208,6 +1217,7 @@ ApplicationWindow {
         castDisconnectOnly = false
         castRejoinPending = false
         castReturnPosition = startPosition
+        castEstimatedPosition = startPosition
         playerSuspended = picture ? playerSuspended : false
         playbackError = ""
         playbackStatus = qsTr("Connecting to %1").arg(
@@ -1310,6 +1320,7 @@ ApplicationWindow {
         }
 
         lastKnownPosition = startPosition
+        castEstimatedPosition = startPosition
         var contentType = castManager.contentTypeForUrl(remoteUrl, currentMediaTitle)
         var requestedVolume = castManager.mediaInfoKnown && !castManager.imageMedia
                 ? castManager.volumePercent
@@ -1698,6 +1709,7 @@ ApplicationWindow {
         }
 
         if (videoCastActive) {
+            castEstimatedPosition = safeTarget
             if (isAviVideo(currentMediaTitle, currentMediaUrl)
                     && (aviCastProgressiveSession || aviCastTimelineOffset > 0)) {
                 lastKnownPosition = safeTarget
@@ -2977,12 +2989,12 @@ ApplicationWindow {
         }
 
         var videoCast = videoCastActive
-        var durationToSave = videoCast && castManager.duration > 0
-                ? castManager.duration
+        var durationToSave = videoCast
+                ? playbackDuration()
                 : mediaPlayer.duration
         var positionToSave = completed
                 ? 0
-                : (videoCast ? castManager.position : mediaPlayer.position)
+                : (videoCast ? playbackPosition() : mediaPlayer.position)
 
         if (!completed && positionToSave <= 0 && lastKnownPosition > 0) {
             positionToSave = lastKnownPosition
@@ -3243,12 +3255,31 @@ ApplicationWindow {
             updatePlaybackStatus()
         }
 
-        onPlayingChanged: updatePlaybackStatus()
+        onPlayingChanged: {
+            if (videoCastActive && !castManager.playing) {
+                var reported = reportedCastPlaybackPosition()
+                if (reported > 0 || castEstimatedPosition <= 0) {
+                    castEstimatedPosition = reported
+                }
+            }
+            updatePlaybackStatus()
+        }
 
         onPositionChanged: {
-            if (videoCastActive
-                    && castManager.position >= 0) {
-                lastKnownPosition = playbackPosition()
+            if (videoCastActive && castManager.position >= 0) {
+                var reported = reportedCastPlaybackPosition()
+
+                // Receiver currentTime may remain zero or update only
+                // sporadically for progressive AVI WebM playback. Do not
+                // rewind an advancing local estimate to a stale zero while
+                // the receiver is PLAYING.
+                if (!castManager.playing
+                        || reported > 0
+                        || castEstimatedPosition <= 0) {
+                    castEstimatedPosition = reported
+                }
+
+                lastKnownPosition = castEstimatedPosition
             }
         }
 
@@ -3485,6 +3516,24 @@ ApplicationWindow {
                             appWindow.aviCastRetiredGrowingFileUrl)
                 appWindow.aviCastRetiredGrowingFileUrl = ""
             }
+        }
+    }
+
+    Timer {
+        id: castPositionEstimateTimer
+        interval: 250
+        repeat: true
+        running: appWindow.videoCastActive
+                 && castManager.playing
+                 && !appWindow.castActivePicture
+        onTriggered: {
+            var nextPosition = appWindow.castEstimatedPosition + interval
+            var duration = appWindow.playbackDuration()
+            if (duration > 0) {
+                nextPosition = Math.min(nextPosition, duration)
+            }
+            appWindow.castEstimatedPosition = Math.max(0, nextPosition)
+            appWindow.lastKnownPosition = appWindow.castEstimatedPosition
         }
     }
 

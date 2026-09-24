@@ -23,6 +23,7 @@
 namespace {
 
 const int MaxEntries = 25;
+const int MaxQueueItems = 500;
 const qint64 MinimumResumePositionMs = 5000;
 const qint64 CompletedThresholdMs = 30000;
 
@@ -312,6 +313,90 @@ void PlaybackHistoryModel::updateSourceSize(const QString &url, qint64 sourceSiz
     }
 }
 
+void PlaybackHistoryModel::updatePlaybackQueue(const QString &url,
+                                               const QVariantList &items)
+{
+    const int existingIndex = indexOfUrl(cleanedText(url));
+    if (existingIndex < 0) {
+        return;
+    }
+
+    QVector<QueueItem> queue;
+    const int itemCount = qMin(items.size(), MaxQueueItems);
+    for (int i = 0; i < itemCount; ++i) {
+        const QVariantMap map = items.at(i).toMap();
+        const QString queueUrl =
+                cleanedText(map.value(QStringLiteral("url")).toString());
+        if (queueUrl.isEmpty()) {
+            continue;
+        }
+
+        bool duplicate = false;
+        for (int j = 0; j < queue.size(); ++j) {
+            if (queue.at(j).url == queueUrl) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+
+        QueueItem item;
+        item.url = queueUrl;
+        item.title = fallbackTitle(
+                    queueUrl,
+                    map.value(QStringLiteral("title")).toString());
+        item.sourceSize = qMax<qint64>(
+                    0,
+                    map.value(QStringLiteral("sourceSize")).toLongLong());
+        queue.append(item);
+    }
+
+    Entry &entry = m_entries[existingIndex];
+    bool unchanged = entry.playbackQueue.size() == queue.size();
+    if (unchanged) {
+        for (int i = 0; i < queue.size(); ++i) {
+            const QueueItem &oldItem = entry.playbackQueue.at(i);
+            const QueueItem &newItem = queue.at(i);
+            if (oldItem.url != newItem.url
+                    || oldItem.title != newItem.title
+                    || oldItem.sourceSize != newItem.sourceSize) {
+                unchanged = false;
+                break;
+            }
+        }
+    }
+
+    if (unchanged) {
+        return;
+    }
+
+    entry.playbackQueue = queue;
+    save();
+}
+
+QVariantList PlaybackHistoryModel::playbackQueueForUrl(const QString &url) const
+{
+    QVariantList result;
+    const int existingIndex = indexOfUrl(cleanedText(url));
+    if (existingIndex < 0) {
+        return result;
+    }
+
+    const QVector<QueueItem> &queue =
+            m_entries.at(existingIndex).playbackQueue;
+    for (int i = 0; i < queue.size(); ++i) {
+        const QueueItem &item = queue.at(i);
+        QVariantMap map;
+        map.insert(QStringLiteral("url"), item.url);
+        map.insert(QStringLiteral("title"), item.title);
+        map.insert(QStringLiteral("sourceSize"), item.sourceSize);
+        result.append(map);
+    }
+    return result;
+}
+
 QString PlaybackHistoryModel::titleForUrl(const QString &url, const QString &title) const
 {
     return fallbackTitle(cleanedText(url), title);
@@ -381,6 +466,44 @@ void PlaybackHistoryModel::load()
             entry.sourceSize = qMax<qint64>(0,
                                            static_cast<qint64>(object.value(QStringLiteral("sourceSize")).toDouble(0)));
             entry.lastPlayed = dateTimeFromJson(object.value(QStringLiteral("lastPlayed")));
+
+            const QJsonArray playbackQueue =
+                    object.value(QStringLiteral("playbackQueue")).toArray();
+            for (int queueIndex = 0;
+                 queueIndex < playbackQueue.size()
+                 && entry.playbackQueue.size() < MaxQueueItems;
+                 ++queueIndex) {
+                const QJsonObject queueObject =
+                        playbackQueue.at(queueIndex).toObject();
+
+                QueueItem queueItem;
+                queueItem.url = cleanedText(
+                            queueObject.value(QStringLiteral("url")).toString());
+                if (queueItem.url.isEmpty()) {
+                    continue;
+                }
+
+                queueItem.title = fallbackTitle(
+                            queueItem.url,
+                            queueObject.value(QStringLiteral("title")).toString());
+                queueItem.sourceSize = qMax<qint64>(
+                            0,
+                            static_cast<qint64>(
+                                queueObject.value(QStringLiteral("sourceSize"))
+                                .toDouble(0)));
+
+                bool duplicateQueueItem = false;
+                for (int j = 0; j < entry.playbackQueue.size(); ++j) {
+                    if (entry.playbackQueue.at(j).url == queueItem.url) {
+                        duplicateQueueItem = true;
+                        break;
+                    }
+                }
+
+                if (!duplicateQueueItem) {
+                    entry.playbackQueue.append(queueItem);
+                }
+            }
 
             if (!entry.url.isEmpty()) {
                 bool duplicate = false;
@@ -485,11 +608,27 @@ bool PlaybackHistoryModel::save() const
         object.insert(QStringLiteral("sourceSize"), static_cast<double>(entry.sourceSize));
         object.insert(QStringLiteral("lastPlayed"), entry.lastPlayed.toString(Qt::ISODate));
 
+        if (!entry.playbackQueue.isEmpty()) {
+            QJsonArray playbackQueue;
+            for (int queueIndex = 0;
+                 queueIndex < entry.playbackQueue.size();
+                 ++queueIndex) {
+                const QueueItem &queueItem = entry.playbackQueue.at(queueIndex);
+                QJsonObject queueObject;
+                queueObject.insert(QStringLiteral("url"), queueItem.url);
+                queueObject.insert(QStringLiteral("title"), queueItem.title);
+                queueObject.insert(QStringLiteral("sourceSize"),
+                                   static_cast<double>(queueItem.sourceSize));
+                playbackQueue.append(queueObject);
+            }
+            object.insert(QStringLiteral("playbackQueue"), playbackQueue);
+        }
+
         entries.append(object);
     }
 
     QJsonObject root;
-    root.insert(QStringLiteral("version"), 1);
+    root.insert(QStringLiteral("version"), 2);
     root.insert(QStringLiteral("entries"), entries);
 
     const QString storageFilePath = this->storagePath();

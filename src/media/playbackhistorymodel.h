@@ -10,6 +10,7 @@
 #include <QAbstractListModel>
 #include <QDateTime>
 #include <QString>
+#include <QVariant>
 #include <QVector>
 
 class PlaybackHistoryModel : public QAbstractListModel
@@ -60,6 +61,9 @@ public:
     Q_INVOKABLE qint64 resumePosition(const QString &url) const;
     Q_INVOKABLE qint64 sourceSizeForUrl(const QString &url) const;
     Q_INVOKABLE void updateSourceSize(const QString &url, qint64 sourceSize);
+    Q_INVOKABLE void updatePlaybackQueue(const QString &url,
+                                         const QVariantList &items);
+    Q_INVOKABLE QVariantList playbackQueueForUrl(const QString &url) const;
     Q_INVOKABLE QString latestUrlValue() const;
     Q_INVOKABLE QString latestTitleValue() const;
     Q_INVOKABLE qint64 latestPositionValue() const;
@@ -73,12 +77,19 @@ signals:
     void latestChanged();
 
 private:
+    struct QueueItem {
+        QString url;
+        QString title;
+        qint64 sourceSize = 0;
+    };
+
     struct Entry {
         QString url;
         QString title;
         qint64 duration = 0;
         qint64 position = 0;
         qint64 sourceSize = 0;
+        QVector<QueueItem> playbackQueue;
         QDateTime lastPlayed;
     };
 

@@ -1912,6 +1912,88 @@ ApplicationWindow {
         return slash >= 0 ? text.substring(slash + 1) : text
     }
 
+    function persistSmbPlaybackQueueSnapshot(sourceUrl) {
+        if (!isSmbUrl(sourceUrl) || playbackQueue.length <= 0) {
+            return
+        }
+
+        var snapshot = []
+        for (var i = 0; i < playbackQueue.length; ++i) {
+            var item = playbackQueue[i]
+            if (!item) {
+                continue
+            }
+
+            var itemUrl = ""
+            if (item.kind === "smb") {
+                itemUrl = smbBackend.smbUrlForFile(item.host,
+                                                   item.port,
+                                                   item.share,
+                                                   item.path)
+            } else if (item.kind === "rememberedSmb") {
+                itemUrl = cleanedValue(item.url)
+            }
+
+            if (!itemUrl || itemUrl.length === 0) {
+                continue
+            }
+
+            snapshot.push({
+                              url: itemUrl,
+                              title: cleanedValue(item.title),
+                              sourceSize: item.size > 0 ? item.size : 0
+                          })
+        }
+
+        if (snapshot.length > 0) {
+            playbackHistory.updatePlaybackQueue(sourceUrl, snapshot)
+        }
+    }
+
+    function restoreSmbPlaybackQueueFromHistory(mediaUrl) {
+        var stored = playbackHistory.playbackQueueForUrl(mediaUrl)
+        if (!stored || stored.length === undefined || stored.length <= 0) {
+            return false
+        }
+
+        var queue = []
+        var selected = -1
+        var currentUrl = normalizedMediaUrl(mediaUrl)
+
+        for (var i = 0; i < stored.length; ++i) {
+            var storedItem = stored[i]
+            var itemUrl = cleanedValue(storedItem.url)
+            var parsed = smbBackend.parseSmbUrl(itemUrl)
+            if (!parsed.valid) {
+                continue
+            }
+
+            if (normalizedMediaUrl(itemUrl) === currentUrl) {
+                selected = queue.length
+            }
+
+            queue.push({
+                           kind: "rememberedSmb",
+                           url: itemUrl,
+                           path: parsed.path,
+                           title: cleanedValue(storedItem.title),
+                           size: storedItem.sourceSize > 0
+                                 ? storedItem.sourceSize
+                                 : 0
+                       })
+        }
+
+        if (selected < 0 || queue.length <= 0) {
+            return false
+        }
+
+        clearPictureQueue()
+        clearFolderMediaQueue()
+        playbackQueue = queue
+        playbackQueueIndex = selected
+        return true
+    }
+
     function setLocalPlaybackQueue(model, selectedIndex) {
         clearPictureQueue()
         clearFolderMediaQueue()
@@ -2319,6 +2401,28 @@ ApplicationWindow {
             return opened
         }
 
+        if (item.kind === "rememberedSmb") {
+            if (wasCasting) {
+                castManager.detach()
+                castRequested = false
+                castResumeLocalAfterDisconnect = false
+                lastKnownPosition = 0
+            }
+
+            var rememberedOpened = openRememberedSmbFromUrl(
+                        item.url,
+                        item.title,
+                        0,
+                        true)
+            if (rememberedOpened && wasCasting && deviceHost.length > 0) {
+                castTargetKind = "video"
+                return startCastingToDevice(deviceName,
+                                            deviceHost,
+                                            devicePort)
+            }
+            return rememberedOpened
+        }
+
         if (item.kind === "local") {
             if (wasCasting) {
                 castManager.detach()
@@ -2448,6 +2552,7 @@ ApplicationWindow {
         if (isNetworkUrl(mediaUrl)) {
             openNetworkUrl(mediaUrl, title, resumePosition)
         } else if (isSmbUrl(mediaUrl)) {
+            restoreSmbPlaybackQueueFromHistory(mediaUrl)
             openRememberedSmbFromUrl(mediaUrl, title, resumePosition, true)
         } else {
             openMedia(mediaUrl, title, resumePosition)
@@ -2657,6 +2762,7 @@ ApplicationWindow {
         if (currentSmbSize > 0) {
             playbackHistory.updateSourceSize(sourceUrl, currentSmbSize)
         }
+        persistSmbPlaybackQueueSnapshot(sourceUrl)
         return true
     }
 
@@ -2813,6 +2919,7 @@ ApplicationWindow {
                     ? ""
                     : smbCredentialStore.passwordFor(currentSmbHost, currentSmbPort, currentSmbShare,
                                                      currentSmbDomain, currentSmbUsername, currentSmbGuest)
+            restoreSmbPlaybackQueueFromHistory(url)
             playbackStatus = currentSmbGuest || currentSmbPassword.length > 0
                     ? qsTr("Ready to resume")
                     : qsTr("Password needed")

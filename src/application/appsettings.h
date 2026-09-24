@@ -19,6 +19,7 @@ class AppSettings : public QObject
     Q_PROPERTY(int skipSeconds READ skipSeconds WRITE setSkipSeconds NOTIFY skipSecondsChanged)
     Q_PROPERTY(int pictureSlideshowSeconds READ pictureSlideshowSeconds WRITE setPictureSlideshowSeconds NOTIFY pictureSlideshowSecondsChanged)
     Q_PROPERTY(bool keepDisplayOn READ keepDisplayOn WRITE setKeepDisplayOn NOTIFY keepDisplayOnChanged)
+    Q_PROPERTY(bool diagnosticsEnabled READ diagnosticsEnabled WRITE setDiagnosticsEnabled NOTIFY diagnosticsEnabledChanged)
     Q_PROPERTY(bool nasShowOnlyVideos READ nasShowOnlyVideos WRITE setNasShowOnlyVideos NOTIFY nasShowOnlyVideosChanged)
     Q_PROPERTY(bool nasShowHiddenFiles READ nasShowHiddenFiles WRITE setNasShowHiddenFiles NOTIFY nasShowHiddenFilesChanged)
     Q_PROPERTY(int defaultVolumePercent READ defaultVolumePercent WRITE setDefaultVolumePercent NOTIFY defaultVolumePercentChanged)
@@ -50,6 +51,8 @@ public:
     void setPictureSlideshowSeconds(int seconds);
     bool keepDisplayOn() const;
     void setKeepDisplayOn(bool enabled);
+    bool diagnosticsEnabled() const;
+    void setDiagnosticsEnabled(bool enabled);
     bool nasShowOnlyVideos() const;
     void setNasShowOnlyVideos(bool enabled);
     bool nasShowHiddenFiles() const;
@@ -99,6 +102,7 @@ signals:
     void skipSecondsChanged();
     void pictureSlideshowSecondsChanged();
     void keepDisplayOnChanged();
+    void diagnosticsEnabledChanged();
     void nasShowOnlyVideosChanged();
     void nasShowHiddenFilesChanged();
     void defaultVolumePercentChanged();
@@ -122,6 +126,7 @@ private:
     int m_skipSeconds = 10;
     int m_pictureSlideshowSeconds = 5;
     bool m_keepDisplayOn = true;
+    bool m_diagnosticsEnabled = false;
     bool m_nasShowOnlyVideos = false;
     bool m_nasShowHiddenFiles = false;
     int m_defaultVolumePercent = 30;

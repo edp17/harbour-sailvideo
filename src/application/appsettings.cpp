@@ -122,6 +122,21 @@ void AppSettings::setKeepDisplayOn(bool enabled)
     scheduleSave();
 }
 
+bool AppSettings::diagnosticsEnabled() const
+{
+    return m_diagnosticsEnabled;
+}
+
+void AppSettings::setDiagnosticsEnabled(bool enabled)
+{
+    if (m_diagnosticsEnabled == enabled) {
+        return;
+    }
+    m_diagnosticsEnabled = enabled;
+    emit diagnosticsEnabledChanged();
+    scheduleSave();
+}
+
 bool AppSettings::nasShowOnlyVideos() const
 {
     return m_nasShowOnlyVideos;
@@ -363,6 +378,7 @@ void AppSettings::resetToDefaults()
     const bool skipChanged = m_skipSeconds != 10;
     const bool slideshowChanged = m_pictureSlideshowSeconds != 5;
     const bool keepChanged = !m_keepDisplayOn;
+    const bool diagnosticsChanged = m_diagnosticsEnabled;
     const bool videosChanged = m_nasShowOnlyVideos;
     const bool hiddenChanged = m_nasShowHiddenFiles;
     const bool lastNasChanged = hasLastNasSource();
@@ -374,6 +390,7 @@ void AppSettings::resetToDefaults()
     m_skipSeconds = 10;
     m_pictureSlideshowSeconds = 5;
     m_keepDisplayOn = true;
+    m_diagnosticsEnabled = false;
     m_nasShowOnlyVideos = false;
     m_nasShowHiddenFiles = false;
     m_defaultVolumePercent = 30;
@@ -394,6 +411,7 @@ void AppSettings::resetToDefaults()
     if (skipChanged) emit skipSecondsChanged();
     if (slideshowChanged) emit pictureSlideshowSecondsChanged();
     if (keepChanged) emit keepDisplayOnChanged();
+    if (diagnosticsChanged) emit diagnosticsEnabledChanged();
     if (videosChanged) emit nasShowOnlyVideosChanged();
     if (hiddenChanged) emit nasShowHiddenFilesChanged();
     if (volumeChanged) emit defaultVolumePercentChanged();
@@ -437,6 +455,7 @@ void AppSettings::load()
     m_pictureSlideshowSeconds = normalizedPictureSlideshowSeconds(
                 root.value(QStringLiteral("pictureSlideshowSeconds")).toInt(5));
     m_keepDisplayOn = root.value(QStringLiteral("keepDisplayOn")).toBool(true);
+    m_diagnosticsEnabled = root.value(QStringLiteral("diagnosticsEnabled")).toBool(false);
     m_nasShowOnlyVideos = root.value(QStringLiteral("nasShowOnlyVideos")).toBool(false);
     m_nasShowHiddenFiles = root.value(QStringLiteral("nasShowHiddenFiles")).toBool(false);
     m_defaultVolumePercent = normalizedPercent(root.value(QStringLiteral("defaultVolumePercent")).toInt(30), 0, 30);
@@ -475,11 +494,12 @@ bool AppSettings::save() const
         return false;
     }
     QJsonObject root;
-    root.insert(QStringLiteral("version"), 4);
+    root.insert(QStringLiteral("version"), 5);
     root.insert(QStringLiteral("videoFillMode"), m_videoFillMode);
     root.insert(QStringLiteral("skipSeconds"), m_skipSeconds);
     root.insert(QStringLiteral("pictureSlideshowSeconds"), m_pictureSlideshowSeconds);
     root.insert(QStringLiteral("keepDisplayOn"), m_keepDisplayOn);
+    root.insert(QStringLiteral("diagnosticsEnabled"), m_diagnosticsEnabled);
     root.insert(QStringLiteral("nasShowOnlyVideos"), m_nasShowOnlyVideos);
     root.insert(QStringLiteral("nasShowHiddenFiles"), m_nasShowHiddenFiles);
     root.insert(QStringLiteral("defaultVolumePercent"), m_defaultVolumePercent);

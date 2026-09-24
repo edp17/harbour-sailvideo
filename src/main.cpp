@@ -14,6 +14,9 @@
  * General Public License for more details.
  */
 
+#include <atomic>
+#include <cstdio>
+
 #include <QByteArray>
 #include <QDebug>
 #include <QFileInfo>
@@ -45,6 +48,31 @@
 
 namespace {
 
+std::atomic_bool g_diagnosticsEnabled {false};
+QtMessageHandler g_previousMessageHandler = nullptr;
+
+void sailVideoMessageHandler(QtMsgType type,
+                             const QMessageLogContext &context,
+                             const QString &message)
+{
+    if (!g_diagnosticsEnabled.load(std::memory_order_relaxed)
+            && type != QtCriticalMsg
+            && type != QtFatalMsg) {
+        return;
+    }
+
+    if (g_previousMessageHandler) {
+        g_previousMessageHandler(type, context, message);
+        return;
+    }
+
+    const QByteArray formatted =
+            qFormatLogMessage(type, context, message).toLocal8Bit();
+    std::fputs(formatted.constData(), stderr);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+}
+
 QUrl commandLineMediaUrl(const QStringList &arguments)
 {
     if (arguments.size() < 2) {
@@ -71,6 +99,10 @@ int main(int argc, char *argv[])
 {
     QScopedPointer<QGuiApplication> app(SailfishApp::application(argc, argv));
 
+    // Default to a quiet console until persisted settings have been loaded.
+    // Critical/fatal Qt messages are always kept visible.
+    g_previousMessageHandler = qInstallMessageHandler(sailVideoMessageHandler);
+
     // Route QtMultimedia through Sailfish's normal media-volume policy.
     // Keep this after application() for Sailjail/icon-launch compatibility,
     // but before createView()/QML creates MediaPlayer.
@@ -90,6 +122,17 @@ int main(int argc, char *argv[])
     LocalVideoModel localVideos;
     LocalVideoCategoryModel localVideoCategories(&localVideos);
     AppSettings appSettings(nasSources.storageDirectory());
+    g_diagnosticsEnabled.store(appSettings.diagnosticsEnabled(),
+                               std::memory_order_relaxed);
+    QObject::connect(&appSettings, &AppSettings::diagnosticsEnabledChanged,
+                     app.data(), [&appSettings]() {
+        const bool enabled = appSettings.diagnosticsEnabled();
+        g_diagnosticsEnabled.store(enabled, std::memory_order_relaxed);
+        if (enabled) {
+            qInfo() << "SailVideo: console diagnostics enabled";
+        }
+    });
+
     CastDeviceModel castDeviceModel(nasSources.storageDirectory());
     CastManager castManager;
     CastMediaPreparer castMediaPreparer(nasSources.storageDirectory());

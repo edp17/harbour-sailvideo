@@ -217,6 +217,17 @@ Page {
             }
 
             SectionHeader {
+                text: qsTr("Diagnostics")
+            }
+
+            TextSwitch {
+                text: qsTr("Console diagnostics")
+                description: qsTr("Write detailed SailVideo diagnostics to the console. Enable this when collecting a troubleshooting log.")
+                checked: appSettings.diagnosticsEnabled
+                onClicked: appSettings.diagnosticsEnabled = checked
+            }
+
+            SectionHeader {
                 text: qsTr("Storage")
             }
 
@@ -245,7 +256,7 @@ Page {
             Label {
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
-                text: qsTr("Reset restores playback/browser preferences: Fit scaling, 10 second skip interval, 5 second picture slideshow interval, new video volume 30%, new video brightness 50%, keep-display-on enabled, media-file preference off, hidden files off, and clears the last browsed NAS shortcut. It does not delete NAS sources, passwords or playback history.")
+                text: qsTr("Reset restores playback/browser preferences: Fit scaling, 10 second skip interval, 5 second picture slideshow interval, new video volume 30%, new video brightness 50%, keep-display-on enabled, console diagnostics off, media-file preference off, hidden files off, and clears the last browsed NAS shortcut. It does not delete NAS sources, passwords or playback history.")
                 color: Theme.secondaryColor
                 font.pixelSize: Theme.fontSizeExtraSmall
                 wrapMode: Text.Wrap

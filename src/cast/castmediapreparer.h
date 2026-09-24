@@ -137,6 +137,8 @@ private:
     bool m_sourceSeekAsyncDone = false;
     GstPad *m_sourceSeekVideoPad = nullptr;
     GstPad *m_sourceSeekAudioPad = nullptr;
+    GstElement *m_sourceSeekVideoTee = nullptr;
+    GstElement *m_sourceSeekAudioTee = nullptr;
     GstElement *m_sourceSeekVideoSink = nullptr;
     GstElement *m_sourceSeekAudioSink = nullptr;
 

@@ -791,48 +791,114 @@ bool CastMediaPreparer::linkSourceSeekWarmupPad(GstPad *pad, bool video)
         return false;
     }
 
+    GstElement *tee = gst_element_factory_make("tee", nullptr);
+    GstElement *queue = gst_element_factory_make("queue", nullptr);
     GstElement *sink = gst_element_factory_make("fakesink", nullptr);
-    if (!sink) {
+
+    if (!tee || !queue || !sink) {
+        if (tee) gst_object_unref(tee);
+        if (queue) gst_object_unref(queue);
+        if (sink) gst_object_unref(sink);
         return false;
     }
 
+    // Keep the decoded pad permanently connected. The warm-up branch
+    // participates in asynchronous preroll so the flushing source seek can
+    // report ASYNC_DONE. A second tee branch is attached to the encoders only
+    // after that post-seek preroll has completed.
     g_object_set(G_OBJECT(sink),
                  "sync", FALSE,
-                 "async", FALSE,
+                 "async", TRUE,
                  nullptr);
-    gst_bin_add(GST_BIN(m_pipeline), sink);
-    gst_element_sync_state_with_parent(sink);
 
-    GstPad *sinkPad = gst_element_get_static_pad(sink, "sink");
-    if (!sinkPad) {
+    gst_bin_add_many(GST_BIN(m_pipeline),
+                     tee,
+                     queue,
+                     sink,
+                     nullptr);
+
+    if (!gst_element_link(queue, sink)) {
+        gst_element_set_state(tee, GST_STATE_NULL);
+        gst_element_set_state(queue, GST_STATE_NULL);
         gst_element_set_state(sink, GST_STATE_NULL);
+        gst_bin_remove(GST_BIN(m_pipeline), tee);
+        gst_bin_remove(GST_BIN(m_pipeline), queue);
         gst_bin_remove(GST_BIN(m_pipeline), sink);
         return false;
     }
 
-    const GstPadLinkReturn result = gst_pad_link(pad, sinkPad);
-    gst_object_unref(sinkPad);
-    if (result != GST_PAD_LINK_OK) {
+    GstPad *teeSinkPad = gst_element_get_static_pad(tee, "sink");
+    GstPad *teeSrcPad = gst_element_get_request_pad(tee, "src_%u");
+    GstPad *queueSinkPad = gst_element_get_static_pad(queue, "sink");
+
+    bool linked = false;
+    if (teeSinkPad && teeSrcPad && queueSinkPad) {
+        const GstPadLinkReturn sourceResult =
+                gst_pad_link(pad, teeSinkPad);
+        const GstPadLinkReturn branchResult =
+                sourceResult == GST_PAD_LINK_OK
+                ? gst_pad_link(teeSrcPad, queueSinkPad)
+                : GST_PAD_LINK_REFUSED;
+
+        linked = sourceResult == GST_PAD_LINK_OK
+                && branchResult == GST_PAD_LINK_OK;
+    }
+
+    if (teeSinkPad) {
+        gst_object_unref(teeSinkPad);
+    }
+    if (queueSinkPad) {
+        gst_object_unref(queueSinkPad);
+    }
+
+    if (!linked) {
+        if (teeSrcPad) {
+            gst_element_release_request_pad(tee, teeSrcPad);
+            gst_object_unref(teeSrcPad);
+        }
+
+        gst_element_set_state(tee, GST_STATE_NULL);
+        gst_element_set_state(queue, GST_STATE_NULL);
         gst_element_set_state(sink, GST_STATE_NULL);
+        gst_bin_remove(GST_BIN(m_pipeline), tee);
+        gst_bin_remove(GST_BIN(m_pipeline), queue);
         gst_bin_remove(GST_BIN(m_pipeline), sink);
         return false;
     }
+
+    // The request pad stays owned by tee until pipeline teardown.
+    gst_object_unref(teeSrcPad);
+
+    syncWithParent(QList<GstElement *>()
+                   << tee
+                   << queue
+                   << sink);
 
     gst_object_ref(pad);
+
     if (video) {
         m_sourceSeekVideoPad = pad;
+        m_sourceSeekVideoTee = tee;
         m_sourceSeekVideoSink = sink;
         m_sourceSeekPhaseStartedMs = QDateTime::currentMSecsSinceEpoch();
+        qInfo() << diagnosticTag()
+                << "AVI video warm-up tee branch ready";
     } else {
         m_sourceSeekAudioPad = pad;
+        m_sourceSeekAudioTee = tee;
         m_sourceSeekAudioSink = sink;
+        qInfo() << diagnosticTag()
+                << "AVI audio warm-up tee branch ready";
     }
+
     return true;
 }
 
 bool CastMediaPreparer::activateTranscodeOutputAfterSeek(QString *errorMessage)
 {
-    if (!m_pipeline || !m_sourceSeekVideoPad) {
+    if (!m_pipeline
+            || !m_sourceSeekVideoPad
+            || !m_sourceSeekVideoTee) {
         if (errorMessage) {
             *errorMessage = tr("The AVI video stream was not ready after source seeking.");
         }
@@ -842,32 +908,44 @@ bool CastMediaPreparer::activateTranscodeOutputAfterSeek(QString *errorMessage)
     if (!configureOutput(TranscodeWebmMode, errorMessage)) {
         return false;
     }
+
+    // This branch is inserted after the warm-up sinks have already completed
+    // post-seek preroll. Avoid introducing another asynchronous sink-state
+    // dependency while the second tee branches are brought online.
+    if (m_sink) {
+        g_object_set(G_OBJECT(m_sink),
+                     "sync", FALSE,
+                     "async", FALSE,
+                     nullptr);
+    }
+
     syncWithParent(QList<GstElement *>() << m_mux << m_sink);
 
-    auto replaceWarmupSink = [this](GstPad *pad,
-                                    GstElement *sink,
-                                    bool video) -> bool {
-        if (!pad) {
+    auto linkOutputBranch = [this](GstElement *tee,
+                                   bool video) -> bool {
+        if (!tee) {
             return !video;
         }
 
-        if (sink) {
-            GstPad *sinkPad = gst_element_get_static_pad(sink, "sink");
-            if (sinkPad) {
-                gst_pad_unlink(pad, sinkPad);
-                gst_object_unref(sinkPad);
-            }
-            gst_element_set_state(sink, GST_STATE_NULL);
-            gst_bin_remove(GST_BIN(m_pipeline), sink);
+        GstPad *teeSrcPad =
+                gst_element_get_request_pad(tee, "src_%u");
+        if (!teeSrcPad) {
+            return false;
         }
 
-        return video ? linkDecodedVideoPad(pad)
-                     : linkDecodedAudioPad(pad);
+        const bool linked = video
+                ? linkDecodedVideoPad(teeSrcPad)
+                : linkDecodedAudioPad(teeSrcPad);
+
+        if (!linked) {
+            gst_element_release_request_pad(tee, teeSrcPad);
+        }
+
+        gst_object_unref(teeSrcPad);
+        return linked;
     };
 
-    if (!replaceWarmupSink(m_sourceSeekVideoPad,
-                           m_sourceSeekVideoSink,
-                           true)) {
+    if (!linkOutputBranch(m_sourceSeekVideoTee, true)) {
         if (errorMessage) {
             *errorMessage = tr("The seeked AVI video could not be connected to the VP8 encoder.");
         }
@@ -875,10 +953,8 @@ bool CastMediaPreparer::activateTranscodeOutputAfterSeek(QString *errorMessage)
     }
     m_videoLinked.store(true);
 
-    if (m_sourceSeekAudioPad) {
-        if (!replaceWarmupSink(m_sourceSeekAudioPad,
-                               m_sourceSeekAudioSink,
-                               false)) {
+    if (m_sourceSeekAudioTee) {
+        if (!linkOutputBranch(m_sourceSeekAudioTee, false)) {
             if (errorMessage) {
                 *errorMessage = tr("The seeked AVI audio could not be connected to the Vorbis encoder.");
             }
@@ -887,16 +963,8 @@ bool CastMediaPreparer::activateTranscodeOutputAfterSeek(QString *errorMessage)
         m_audioLinked.store(true);
     }
 
-    m_sourceSeekVideoSink = nullptr;
-    m_sourceSeekAudioSink = nullptr;
-    if (m_sourceSeekVideoPad) {
-        gst_object_unref(m_sourceSeekVideoPad);
-        m_sourceSeekVideoPad = nullptr;
-    }
-    if (m_sourceSeekAudioPad) {
-        gst_object_unref(m_sourceSeekAudioPad);
-        m_sourceSeekAudioPad = nullptr;
-    }
+    qInfo() << diagnosticTag()
+            << "post-seek WebM branches added through warm-up tees";
 
     if (m_timelineOffset != m_requestedStartPositionMs) {
         m_timelineOffset = m_requestedStartPositionMs;
@@ -1063,6 +1131,8 @@ void CastMediaPreparer::releaseSourceSeekWarmupRefs()
         gst_object_unref(m_sourceSeekAudioPad);
         m_sourceSeekAudioPad = nullptr;
     }
+    m_sourceSeekVideoTee = nullptr;
+    m_sourceSeekAudioTee = nullptr;
     m_sourceSeekVideoSink = nullptr;
     m_sourceSeekAudioSink = nullptr;
 }
@@ -1123,6 +1193,11 @@ bool CastMediaPreparer::linkDecodedVideoPad(GstPad *pad)
     int sourceWidth = 0;
     int sourceHeight = 0;
     GstCaps *inputCaps = gst_pad_get_current_caps(pad);
+    if (!inputCaps
+            && m_sourceSeekVideoPad
+            && pad != m_sourceSeekVideoPad) {
+        inputCaps = gst_pad_get_current_caps(m_sourceSeekVideoPad);
+    }
     if (inputCaps && gst_caps_get_size(inputCaps) > 0) {
         const GstStructure *structure = gst_caps_get_structure(inputCaps, 0);
         if (structure) {

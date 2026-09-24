@@ -408,7 +408,20 @@ ApplicationWindow {
     function togglePlayback() {
         if (videoCastActive) {
             if (castManager.mediaStopped) {
-                castManager.continueMedia()
+                // A completed transcoded AVI may have used a short prepared
+                // fragment whose cache is released at natural EOS. Rebuild
+                // from the beginning instead of reloading that stale URL.
+                if (playbackCompleted
+                        && isAviVideo(currentMediaTitle, currentMediaUrl)) {
+                    playbackCompleted = false
+                    lastKnownPosition = 0
+                    playbackHistory.updatePosition(currentMediaUrl,
+                                                   playbackDuration(),
+                                                   0)
+                    castCurrentVideoToConnectedDevice(0)
+                } else {
+                    castManager.continueMedia()
+                }
             } else if (castManager.playing) {
                 castManager.pause()
             } else {
@@ -1641,23 +1654,10 @@ ApplicationWindow {
         playbackStatus = qsTr("Preparing AVI seek for Chromecast")
         lastKnownPosition = target
 
-        if (aviCastSeekGeneration === 1) {
-            console.log("SailVideo AVI Cast seek: first generation uses proven immediate r11 path")
-            var started = prepareAviCast("seek",
-                                         castManager.deviceName,
-                                         castManager.host,
-                                         castManager.port,
-                                         target,
-                                         seekKey)
-            if (!started) {
-                userSeekPending = false
-                if (castManager.connected) {
-                    castManager.play()
-                }
-            }
-            return started
-        }
-
+        // Always allow the previous transcode/SMB generation to settle.
+        // Device testing showed that the one rare preroll timeout occurred on
+        // the formerly immediate first seek, while settled generations were
+        // reliable with the tee-based warm-up/output handoff.
         aviCastQueuedSeekTarget = target
         aviCastQueuedSeekKey = seekKey
         aviCastQueuedSeekMediaUrl = currentMediaUrl
@@ -1665,7 +1665,7 @@ ApplicationWindow {
         console.log("SailVideo AVI Cast seek: generation "
                     + aviCastSeekGeneration
                     + " queued for " + target
-                    + " ms; allowing old pipeline to settle")
+                    + " ms; allowing transcode pipeline to settle")
         aviCastSeekPrepareTimer.restart()
         return true
     }
@@ -1745,7 +1745,20 @@ ApplicationWindow {
         }
 
         if (videoCastActive) {
-            if (isAviVideo(currentMediaTitle, currentMediaUrl)
+            var castAvi = isAviVideo(currentMediaTitle, currentMediaUrl)
+
+            if (castAvi && castManager.mediaStopped && playbackCompleted) {
+                // Natural EOS releases prepared AVI cache files. Restart by
+                // preparing a fresh Cast source instead of asking CastManager
+                // to reload the now-stale prepared URL.
+                playbackCompleted = false
+                lastKnownPosition = 0
+                playbackHistory.updatePosition(currentMediaUrl, playbackDuration(), 0)
+                castCurrentVideoToConnectedDevice(0)
+                return
+            }
+
+            if (castAvi
                     && (aviCastProgressiveSession || aviCastTimelineOffset > 0)) {
                 playbackHistory.updatePosition(currentMediaUrl, playbackDuration(), 0)
                 requestAviCastSeek(0)

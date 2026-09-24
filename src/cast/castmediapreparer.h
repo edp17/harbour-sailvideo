@@ -128,8 +128,6 @@ private:
     bool m_streamReadyEmitted = false;
     qint64 m_lastProgressBytes = 0;
     quint64 m_diagnosticGeneration = 0;
-    qint64 m_lastDiagnosticOutputBytes = -1;
-    qint64 m_lastDiagnosticOutputLogMs = 0;
     qint64 m_requestedStartPositionMs = 0;
     qint64 m_timelineOffset = 0;
     SourceSeekPhase m_sourceSeekPhase = SourceSeekNone;

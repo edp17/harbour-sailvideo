@@ -252,8 +252,6 @@ bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
 
     m_requestedStartPositionMs = qMax<qint64>(0, startPositionMs);
     ++m_diagnosticGeneration;
-    m_lastDiagnosticOutputBytes = -1;
-    m_lastDiagnosticOutputLogMs = 0;
     qInfo() << diagnosticTag() << "prepare started";
 
     if (m_timelineOffset != 0) {
@@ -317,7 +315,6 @@ bool CastMediaPreparer::prepareAvi(const QString &inputUrl,
 
     qInfo() << diagnosticTag()
             << "SailVideo Cast remux: trying lossless AVI -> MP4 preparation";
-    logPipelineState("remux start requested");
     return true;
 }
 
@@ -342,7 +339,6 @@ void CastMediaPreparer::cancelInternal(bool preserveOutput)
             << (!m_partPath.isEmpty() && QFileInfo(m_partPath).exists())
             << "partBytes"
             << (m_partPath.isEmpty() ? 0 : QFileInfo(m_partPath).size());
-    logPipelineState("before cancel teardown");
 
     setBusy(false);
     m_mode.store(NoPreparationMode);
@@ -580,9 +576,6 @@ bool CastMediaPreparer::startTranscodePipeline(QString *errorMessage)
 
     const GstStateChangeReturn state = gst_element_set_state(
                 m_pipeline, GST_STATE_PLAYING);
-    qInfo() << diagnosticTag()
-            << "transcode PLAYING request return" << int(state);
-    logPipelineState("after transcode PLAYING request");
     if (state == GST_STATE_CHANGE_FAILURE) {
         if (errorMessage) {
             *errorMessage = tr("GStreamer could not start the AVI transcoding pipeline.");
@@ -986,7 +979,6 @@ bool CastMediaPreparer::activateTranscodeOutputAfterSeek(QString *errorMessage)
     qInfo() << diagnosticTag()
             << "SailVideo Cast transcode: source seek ready; WebM timeline 0 maps to AVI"
             << m_timelineOffset << "ms";
-    logPipelineState("after source-seek PLAYING request");
     return true;
 }
 
@@ -1016,8 +1008,6 @@ void CastMediaPreparer::processTranscodeSourceSeek()
                 << "SailVideo Cast transcode: pausing warmed AVI pipeline before source seek";
         const GstStateChangeReturn state =
                 gst_element_set_state(m_pipeline, GST_STATE_PAUSED);
-        qInfo() << diagnosticTag()
-                << "source-seek PAUSED request return" << int(state);
         if (state == GST_STATE_CHANGE_FAILURE) {
             finishFailure(tr("The AVI transcode pipeline could not pause before seeking."));
             return;
@@ -1065,8 +1055,6 @@ void CastMediaPreparer::processTranscodeSourceSeek()
                 if (!staleAsync) {
                     break;
                 }
-                qInfo() << diagnosticTag()
-                        << "discarding pre-seek ASYNC_DONE";
                 gst_message_unref(staleAsync);
             }
         }
@@ -1095,7 +1083,11 @@ void CastMediaPreparer::processTranscodeSourceSeek()
         // accepted. Do not tear down the warm-up sinks and attach the WebM
         // encoders until the flushing seek has actually completed preroll.
         if (!m_sourceSeekAsyncDone) {
-            if (now - m_sourceSeekPhaseStartedMs > 5000) {
+            // SMB range turnover plus avidemux preroll can occasionally take
+            // longer than five seconds even when the seek is progressing.
+            // Keep this bounded, but allow a little more time before treating
+            // the source seek as wedged.
+            if (now - m_sourceSeekPhaseStartedMs > 8000) {
                 finishFailure(tr("The AVI source seek did not finish preroll in time."));
             }
             return;
@@ -1460,13 +1452,6 @@ void CastMediaPreparer::pollBus()
         if (!m_busy.load()) {
             return;
         }
-
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        if (m_sourceSeekPhase != SourceSeekComplete
-                && now - m_lastDiagnosticOutputLogMs >= 1000) {
-            m_lastDiagnosticOutputLogMs = now;
-            logPipelineState("source-seek phase heartbeat");
-        }
     }
 
     if (m_mode.load() == TranscodeWebmMode
@@ -1474,22 +1459,6 @@ void CastMediaPreparer::pollBus()
             && !m_partPath.isEmpty()) {
         const QFileInfo growingFile(m_partPath);
         const qint64 bytes = growingFile.exists() ? growingFile.size() : 0;
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
-
-        if (m_lastDiagnosticOutputBytes < 0
-                || qAbs(bytes - m_lastDiagnosticOutputBytes) >= (256 * 1024)
-                || now - m_lastDiagnosticOutputLogMs >= 1000) {
-            qInfo() << diagnosticTag()
-                    << "WebM output growth:" << bytes << "bytes;"
-                    << "delta" << (m_lastDiagnosticOutputBytes < 0
-                                   ? bytes
-                                   : bytes - m_lastDiagnosticOutputBytes)
-                    << "videoLinked" << m_videoLinked.load()
-                    << "audioLinked" << m_audioLinked.load()
-                    << "readyEmitted" << m_streamReadyEmitted;
-            m_lastDiagnosticOutputBytes = bytes;
-            m_lastDiagnosticOutputLogMs = now;
-        }
 
         if (bytes >= m_lastProgressBytes + (1024 * 1024)) {
             m_lastProgressBytes = bytes;
@@ -1530,20 +1499,7 @@ void CastMediaPreparer::pollBus()
         const GstMessageType messageType = GST_MESSAGE_TYPE(message);
 
         if (messageType == GST_MESSAGE_STATE_CHANGED) {
-            if (GST_MESSAGE_SRC(message) == GST_OBJECT(m_pipeline)) {
-                GstState oldState = GST_STATE_VOID_PENDING;
-                GstState newState = GST_STATE_VOID_PENDING;
-                GstState pendingState = GST_STATE_VOID_PENDING;
-                gst_message_parse_state_changed(message,
-                                                &oldState,
-                                                &newState,
-                                                &pendingState);
-                qInfo() << diagnosticTag()
-                        << "GStreamer bus pipeline state"
-                        << gst_element_state_get_name(oldState)
-                        << "->" << gst_element_state_get_name(newState)
-                        << "pending" << gst_element_state_get_name(pendingState);
-            }
+            // Consume routine state changes without logging every transition.
             gst_message_unref(message);
             continue;
         }
@@ -1555,15 +1511,13 @@ void CastMediaPreparer::pollBus()
                 m_sourceSeekAsyncDone = true;
                 qInfo() << diagnosticTag()
                         << "GStreamer bus post-seek ASYNC_DONE";
-            } else {
-                qInfo() << diagnosticTag() << "GStreamer bus ASYNC_DONE";
             }
             gst_message_unref(message);
             continue;
         }
 
         if (messageType == GST_MESSAGE_STREAM_START) {
-            qInfo() << diagnosticTag() << "GStreamer bus STREAM_START";
+            // STREAM_START is expected for every generation; consume quietly.
             gst_message_unref(message);
             continue;
         }
@@ -1711,12 +1665,7 @@ void CastMediaPreparer::teardownPipeline()
     m_busTimer.stop();
 
     if (m_pipeline) {
-        logPipelineState("teardown begin");
-        const GstStateChangeReturn nullState =
-                gst_element_set_state(m_pipeline, GST_STATE_NULL);
-        qInfo() << diagnosticTag()
-                << "pipeline NULL request return" << int(nullState);
-        logPipelineState("after NULL request");
+        gst_element_set_state(m_pipeline, GST_STATE_NULL);
     }
 
     if (m_bus) {
@@ -1738,8 +1687,6 @@ void CastMediaPreparer::teardownPipeline()
     m_demux = nullptr;
     m_mux = nullptr;
     m_sink = nullptr;
-
-    qInfo() << diagnosticTag() << "pipeline teardown complete";
 }
 
 void CastMediaPreparer::setBusy(bool busy)

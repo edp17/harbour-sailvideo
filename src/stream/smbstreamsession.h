@@ -25,11 +25,14 @@ public:
                               bool guest, QObject *parent = nullptr);
     ~SmbStreamSession() override;
 signals:
+    void fileSizeReady(const QString &token, qint64 size);
+    void fileSizeFailed(const QString &token, const QString &message);
     void requestReady(quint64 requestId);
     void chunkReady(quint64 requestId, const QByteArray &data, bool lastChunk);
     void requestFailed(quint64 requestId, const QString &message);
     void stopped(const QString &token);
 public slots:
+    void requestFileSize();
     void requestRange(quint64 requestId, qint64 offset, qint64 length,
                       bool allowOpenRetry);
     void cancelRequest(quint64 requestId);

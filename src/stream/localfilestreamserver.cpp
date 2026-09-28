@@ -13,7 +13,6 @@
 #include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
-#include <QFutureWatcher>
 #include <QHostAddress>
 #include <QMimeDatabase>
 #include <QMimeType>
@@ -25,7 +24,6 @@
 #include <QTimer>
 #include <QUrl>
 #include <QUuid>
-#include <QtConcurrent>
 
 namespace {
 
@@ -501,6 +499,7 @@ void LocalFileStreamServer::clear()
 
     m_pendingRequests.clear();
     m_smbSizePending.clear();
+    m_smbSizeResolutionPending.clear();
     m_smbRequestSockets.clear();
     shutdownAllSmbSessions();
     m_entries.clear();
@@ -955,7 +954,7 @@ void LocalFileStreamServer::handleRequest(QTcpSocket *socket, const QByteArray &
         return;
     }
 
-    if (entry.type == StreamType::SmbFile && entry.size <= 0) {
+    if (entry.type == StreamType::SmbFile && !entry.smbSizeVerified) {
         resolveSmbSizeAndRetry(socket, token, request);
         return;
     }
@@ -1015,66 +1014,109 @@ void LocalFileStreamServer::resolveSmbSizeAndRetry(
         return;
     }
 
-    const StreamEntry entry = it.value();
-    m_smbSizePending.insert(socket);
-    QPointer<QTcpSocket> guardedSocket(socket);
+    PendingSmbSizeRequest pending;
+    pending.token = token;
+    pending.request = request;
+    m_smbSizePending.insert(socket, pending);
 
-    QFutureWatcher<QPair<qint64, QString> > *watcher =
-            new QFutureWatcher<QPair<qint64, QString> >(this);
+    SmbStreamSession *session = ensureSmbSession(token, it.value());
+    if (!session) {
+        m_smbSizePending.remove(socket);
+        sendSimpleResponse(socket,
+                           500,
+                           reasonPhrase(500),
+                           tr("Could not create the SMB streaming session.")
+                           .toUtf8());
+        return;
+    }
 
-    connect(watcher,
-            &QFutureWatcher<QPair<qint64, QString> >::finished,
-            this,
-            [this, watcher, guardedSocket, token, request]() {
-        const QPair<qint64, QString> result = watcher->result();
-        watcher->deleteLater();
+    if (m_smbSizeResolutionPending.contains(token)) {
+        return;
+    }
 
-        if (guardedSocket) {
-            m_smbSizePending.remove(guardedSocket.data());
+    m_smbSizeResolutionPending.insert(token);
+    const bool invoked = QMetaObject::invokeMethod(
+                session,
+                "requestFileSize",
+                Qt::QueuedConnection);
+    if (!invoked) {
+        m_smbSizeResolutionPending.remove(token);
+        handleSmbFileSizeFailed(
+                    token,
+                    tr("Could not queue SMB file-size verification."));
+    }
+}
+
+void LocalFileStreamServer::handleSmbFileSizeReady(
+        const QString &token,
+        qint64 size)
+{
+    m_smbSizeResolutionPending.remove(token);
+
+    auto mutableEntry = m_entries.find(token);
+    if (mutableEntry == m_entries.end() || size <= 0) {
+        handleSmbFileSizeFailed(
+                    token,
+                    tr("The SMB file size could not be verified."));
+        return;
+    }
+
+    const qint64 sizeHint = mutableEntry->size;
+    mutableEntry->size = size;
+    mutableEntry->smbSizeVerified = true;
+    setLastError(QString());
+
+    qInfo() << "SailVideo SMB bridge: token"
+            << token.left(8)
+            << "verified file size" << size
+            << "previous hint" << sizeHint;
+
+    const QList<QTcpSocket *> sockets = m_smbSizePending.keys();
+    for (QTcpSocket *socket : sockets) {
+        const auto pendingIt = m_smbSizePending.constFind(socket);
+        if (pendingIt == m_smbSizePending.constEnd()
+                || pendingIt->token != token) {
+            continue;
         }
-        if (!guardedSocket
-                || guardedSocket->state() == QAbstractSocket::UnconnectedState) {
-            return;
+
+        const QByteArray originalRequest = pendingIt->request;
+        m_smbSizePending.remove(socket);
+
+        if (socket
+                && socket->state() != QAbstractSocket::UnconnectedState) {
+            handleRequest(socket, originalRequest);
+        }
+    }
+}
+
+void LocalFileStreamServer::handleSmbFileSizeFailed(
+        const QString &token,
+        const QString &message)
+{
+    m_smbSizeResolutionPending.remove(token);
+
+    const QString cleanMessage = message.isEmpty()
+            ? tr("The SMB file size could not be verified.")
+            : message;
+    setLastError(cleanMessage);
+
+    const QList<QTcpSocket *> sockets = m_smbSizePending.keys();
+    for (QTcpSocket *socket : sockets) {
+        const auto pendingIt = m_smbSizePending.constFind(socket);
+        if (pendingIt == m_smbSizePending.constEnd()
+                || pendingIt->token != token) {
+            continue;
         }
 
-        if (result.first <= 0) {
-            const QString message = result.second.isEmpty()
-                    ? tr("The SMB file size could not be resolved.")
-                    : result.second;
-            setLastError(message);
-            sendSimpleResponse(guardedSocket.data(),
+        m_smbSizePending.remove(socket);
+        if (socket
+                && socket->state() != QAbstractSocket::UnconnectedState) {
+            sendSimpleResponse(socket,
                                500,
                                reasonPhrase(500),
-                               message.toUtf8());
-            return;
+                               cleanMessage.toUtf8());
         }
-
-        auto mutableEntry = m_entries.find(token);
-        if (mutableEntry == m_entries.end()) {
-            sendSimpleResponse(guardedSocket.data(), 404, reasonPhrase(404));
-            return;
-        }
-
-        mutableEntry->size = result.first;
-        setLastResolvedSize(result.first);
-        setLastError(QString());
-        qInfo() << "SailVideo SMB bridge: asynchronously resolved file size"
-                << result.first;
-        handleRequest(guardedSocket.data(), request);
-    });
-
-    watcher->setFuture(QtConcurrent::run([entry]() -> QPair<qint64, QString> {
-        SmbBackend backend;
-        const qint64 resolved = backend.fileSize(entry.smbHost,
-                                                 entry.smbPort,
-                                                 entry.smbShare,
-                                                 entry.smbPath,
-                                                 entry.smbDomain,
-                                                 entry.smbUsername,
-                                                 entry.smbPassword,
-                                                 entry.smbGuest);
-        return qMakePair(resolved, backend.lastError());
-    }));
+    }
 }
 
 void LocalFileStreamServer::sendTransferHeaders(QTcpSocket *socket,
@@ -1284,6 +1326,10 @@ SmbStreamSession *LocalFileStreamServer::ensureSmbSession(
     holder->lastUsedMs = QDateTime::currentMSecsSinceEpoch();
     m_smbSessions.insert(token, holder);
 
+    connect(worker, &SmbStreamSession::fileSizeReady,
+            this, &LocalFileStreamServer::handleSmbFileSizeReady);
+    connect(worker, &SmbStreamSession::fileSizeFailed,
+            this, &LocalFileStreamServer::handleSmbFileSizeFailed);
     connect(worker, &SmbStreamSession::requestReady,
             this, &LocalFileStreamServer::handleSmbRequestReady);
     connect(worker, &SmbStreamSession::chunkReady,

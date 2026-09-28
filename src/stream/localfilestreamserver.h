@@ -91,6 +91,9 @@ private slots:
     void pumpClientData();
     void pumpGrowingTransfers();
     void cleanupClient();
+    void handleSmbFileSizeReady(const QString &token, qint64 size);
+    void handleSmbFileSizeFailed(const QString &token,
+                                 const QString &message);
     void handleSmbRequestReady(quint64 requestId);
     void handleSmbChunkReady(quint64 requestId,
                              const QByteArray &data,
@@ -124,6 +127,12 @@ private:
         QString smbUsername;
         QString smbPassword;
         bool smbGuest = true;
+        bool smbSizeVerified = false;
+    };
+
+    struct PendingSmbSizeRequest {
+        QString token;
+        QByteArray request;
     };
 
     struct Transfer {
@@ -207,7 +216,8 @@ private:
     QHash<QString, StreamEntry> m_entries;
     QHash<QTcpSocket *, QByteArray> m_pendingRequests;
     QHash<QTcpSocket *, Transfer *> m_transfers;
-    QSet<QTcpSocket *> m_smbSizePending;
+    QHash<QTcpSocket *, PendingSmbSizeRequest> m_smbSizePending;
+    QSet<QString> m_smbSizeResolutionPending;
     QHash<QString, SmbSessionHolder *> m_smbSessions;
     QHash<quint64, QPointer<QTcpSocket> > m_smbRequestSockets;
     quint64 m_nextTransferId = 1;

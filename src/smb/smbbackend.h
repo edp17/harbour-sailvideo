@@ -30,6 +30,7 @@ public:
 
     bool isOpen() const;
     qint64 maxReadSize() const;
+    qint64 fileSize(QString *errorString);
     QByteArray read(qint64 offset, qint64 count, QString *errorString);
     QString errorString() const;
 

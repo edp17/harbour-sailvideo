@@ -23,6 +23,38 @@ SmbStreamSession::SmbStreamSession(const QString &token,
 
 SmbStreamSession::~SmbStreamSession() = default;
 
+void SmbStreamSession::requestFileSize()
+{
+    if (m_stopping) {
+        emit fileSizeFailed(m_token, tr("The SMB stream session is stopping."));
+        return;
+    }
+
+    QString error;
+    if (!ensureReader(true, &error)) {
+        emit fileSizeFailed(
+                    m_token,
+                    error.isEmpty()
+                    ? tr("Could not open the SMB file to verify its size.")
+                    : error);
+        return;
+    }
+
+    const qint64 size = m_reader->fileSize(&error);
+    if (size <= 0) {
+        emit fileSizeFailed(
+                    m_token,
+                    error.isEmpty()
+                    ? tr("The SMB file size could not be verified.")
+                    : error);
+        return;
+    }
+
+    qInfo() << "SailVideo SMB session:" << m_token.left(8)
+            << "verified open-handle file size" << size;
+    emit fileSizeReady(m_token, size);
+}
+
 void SmbStreamSession::requestRange(quint64 id, qint64 offset,
                                     qint64 length, bool retry)
 {

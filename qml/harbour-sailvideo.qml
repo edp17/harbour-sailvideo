@@ -2652,7 +2652,7 @@ ApplicationWindow {
 
         return openSmbFile(parsed.host, parsed.port, parsed.share, parsed.path,
                            sourceDomain, sourceUsername, sourcePassword, sourceGuest,
-                           storedSourceSize(mediaUrl),
+                           0,
                            title && title.length > 0 ? title : parsed.fileName, resumePosition)
     }
 
@@ -2765,15 +2765,12 @@ ApplicationWindow {
         currentSmbUsername = cleanedValue(username)
         currentSmbPassword = password || ""
         currentSmbGuest = guest === true
-        currentSmbSize = localFileStreamServer.lastResolvedSize > 0
-                ? localFileStreamServer.lastResolvedSize
-                : (size > 0 ? size : 0)
+        // This is only a hint for later token creation. Each SMB HTTP token
+        // verifies the open file handle's real end-of-file before serving.
+        currentSmbSize = size > 0 ? size : 0
         syncSmbQueueIndices(cleanPath, "video")
 
         playSource(sourceUrl, streamUrl, fileTitle, resumePosition, true, "smb")
-        if (currentSmbSize > 0) {
-            playbackHistory.updateSourceSize(sourceUrl, currentSmbSize)
-        }
         persistSmbPlaybackQueueSnapshot(sourceUrl)
         return true
     }
@@ -3324,21 +3321,9 @@ ApplicationWindow {
         }
     }
 
-    Connections {
-        target: localFileStreamServer
-
-        onLastResolvedSizeChanged: {
-            if (appWindow.currentSourceKind === "smb"
-                    && !appWindow.castMode
-                    && localFileStreamServer.lastResolvedSize > 0
-                    && appWindow.currentMediaUrl.length > 0) {
-                appWindow.currentSmbSize = localFileStreamServer.lastResolvedSize
-                playbackHistory.updateSourceSize(
-                            appWindow.currentMediaUrl,
-                            localFileStreamServer.lastResolvedSize)
-            }
-        }
-    }
+    // SMB file size is token-scoped inside LocalFileStreamServer. Do not
+    // attribute the stream server's global lastResolvedSize to whichever media
+    // happens to be current when an older request finishes.
 
     Connections {
         target: appWindow.urlDownloadCacheObject

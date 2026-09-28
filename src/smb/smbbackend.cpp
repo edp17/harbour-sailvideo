@@ -20,6 +20,7 @@
 #include <QUrl>
 
 #include <algorithm>
+#include <cstdio>
 #include <fcntl.h>
 #include <stdint.h>
 #include <string.h>
@@ -113,6 +114,7 @@ public:
     typedef smb2fh *(*OpenFunc)(smb2_context *, const char *, int);
     typedef int (*CloseFunc)(smb2_context *, smb2fh *);
     typedef int (*PReadFunc)(smb2_context *, smb2fh *, uint8_t *, uint32_t, uint64_t);
+    typedef int64_t (*LSeekFunc)(smb2_context *, smb2fh *, int64_t, int, uint64_t *);
     typedef int (*StatFunc)(smb2_context *, const char *, smb2_stat_64 *);
     typedef uint32_t (*MaxReadSizeFunc)(smb2_context *);
 
@@ -188,6 +190,7 @@ public:
     OpenFunc open = nullptr;
     CloseFunc close = nullptr;
     PReadFunc pread = nullptr;
+    LSeekFunc lseek = nullptr;
     StatFunc stat = nullptr;
     MaxReadSizeFunc maxReadSize = nullptr;
 
@@ -212,6 +215,7 @@ private:
         // error if smb2_stat is unavailable.
         setAuthentication = reinterpret_cast<SetAuthenticationFunc>(m_library.resolve("smb2_set_authentication"));
         setSign = reinterpret_cast<SetSignFunc>(m_library.resolve("smb2_set_sign"));
+        lseek = reinterpret_cast<LSeekFunc>(m_library.resolve("smb2_lseek"));
         stat = reinterpret_cast<StatFunc>(m_library.resolve("smb2_stat"));
         maxReadSize = reinterpret_cast<MaxReadSizeFunc>(m_library.resolve("smb2_get_max_read_size"));
 
@@ -382,6 +386,46 @@ bool SmbFileReader::isOpen() const
 qint64 SmbFileReader::maxReadSize() const
 {
     return d->maxRead;
+}
+
+qint64 SmbFileReader::fileSize(QString *errorString)
+{
+    if (!isOpen()) {
+        const QString message = QStringLiteral("The SMB file is not open.");
+        if (errorString) {
+            *errorString = message;
+        }
+        return -1;
+    }
+
+    if (!d->api.lseek) {
+        const QString message =
+                QStringLiteral("The loaded libsmb2 library does not provide smb2_lseek.");
+        if (errorString) {
+            *errorString = message;
+        }
+        return -1;
+    }
+
+    uint64_t endOffset = 0;
+    const int64_t rc = d->api.lseek(d->context,
+                                    d->handle,
+                                    0,
+                                    SEEK_END,
+                                    &endOffset);
+    if (rc < 0) {
+        d->errorString = d->api.error(d->context);
+        if (errorString) {
+            *errorString = d->errorString;
+        }
+        return -1;
+    }
+
+    d->errorString.clear();
+    if (errorString) {
+        errorString->clear();
+    }
+    return static_cast<qint64>(endOffset);
 }
 
 QByteArray SmbFileReader::read(qint64 offset, qint64 count, QString *errorString)

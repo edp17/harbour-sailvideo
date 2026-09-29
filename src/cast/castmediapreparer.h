@@ -36,6 +36,8 @@ public:
     Q_INVOKABLE bool prepareAvi(const QString &inputUrl,
                                 const QString &sourceKey,
                                 qint64 startPositionMs = 0);
+    Q_INVOKABLE bool prepareCastTranscode(const QString &inputUrl,
+                                          const QString &sourceKey);
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void cancelPreservingOutput();
     Q_INVOKABLE void clearPreparedCache();
@@ -80,9 +82,15 @@ private:
     static void decodedPadAddedThunk(GstElement *decodebin,
                                      GstPad *pad,
                                      gpointer userData);
+    static gint autoplugSelectThunk(GstElement *decodebin,
+                                    GstPad *pad,
+                                    GstCaps *caps,
+                                    GstElementFactory *factory,
+                                    gpointer userData);
 
     void handleDemuxPadAdded(GstPad *pad);
     void handleDecodedPadAdded(GstElement *decodebin, GstPad *pad);
+    gint handleAutoplugSelect(GstElementFactory *factory) const;
 
     bool startRemuxPipeline(QString *errorMessage);
     bool startTranscodePipeline(QString *errorMessage);
@@ -126,6 +134,8 @@ private:
     std::atomic<bool> m_fallbackScheduled {false};
     std::atomic<int> m_mode {NoPreparationMode};
     bool m_streamReadyEmitted = false;
+    bool m_genericCastTranscode = false;
+    bool m_forceSoftwareVideoDecode = false;
     qint64 m_lastProgressBytes = 0;
     quint64 m_diagnosticGeneration = 0;
     qint64 m_requestedStartPositionMs = 0;

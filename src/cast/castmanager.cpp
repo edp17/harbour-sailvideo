@@ -1100,7 +1100,8 @@ void CastManager::processEnvelope(const Envelope &envelope)
             processMediaStatus(message);
         } else if (type == QStringLiteral("LOAD_FAILED")
                    || type == QStringLiteral("LOAD_CANCELLED")
-                   || type == QStringLiteral("INVALID_REQUEST")) {
+                   || type == QStringLiteral("INVALID_REQUEST")
+                   || type == QStringLiteral("ERROR")) {
             processProtocolError(message);
         }
     }
@@ -1382,6 +1383,9 @@ void CastManager::processProtocolError(const QJsonObject &message)
             : tr("Chromecast error: %1 (%2)").arg(type, reason);
 
     qWarning() << "SailVideo Cast:" << text;
+    qWarning() << "SailVideo Cast: protocol error payload"
+               << QString::fromUtf8(
+                      QJsonDocument(message).toJson(QJsonDocument::Compact));
     setLastError(text);
     setStatusText(text);
     setCasting(false);

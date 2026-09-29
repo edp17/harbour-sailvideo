@@ -165,6 +165,7 @@ ApplicationWindow {
     property int aviCastPendingPosition: 0
     property bool aviCastResumeLocalOnFailure: false
     property bool aviCastTranscoding: false
+    property bool castCompatibilityTranscodePending: false
     property bool aviCastStreamingStarted: false
     property bool aviCastProgressiveSession: false
     property string aviCastGrowingFileUrl: ""
@@ -482,6 +483,46 @@ ApplicationWindow {
                 || valueEndsWithIgnoreCase(cleanUrl, ".avi")
     }
 
+    function isMp4Video(title, mediaUrl) {
+        var cleanUrl = cleanedValue(mediaUrl)
+        var query = cleanUrl.indexOf("?")
+        if (query >= 0) cleanUrl = cleanUrl.substring(0, query)
+        var fragment = cleanUrl.indexOf("#")
+        if (fragment >= 0) cleanUrl = cleanUrl.substring(0, fragment)
+
+        return valueEndsWithIgnoreCase(title, ".mp4")
+                || valueEndsWithIgnoreCase(cleanUrl, ".mp4")
+    }
+
+    function currentVideoNeedsCastCompatibilityTranscode() {
+        if (!isMp4Video(currentMediaTitle, currentMediaUrl)) {
+            return false
+        }
+
+        var width = 0
+        var height = 0
+        try {
+            var md = mediaPlayer.metaData
+            var resolution = md
+                    ? (md.resolution || md.videoResolution || md.Resolution)
+                    : null
+            if (resolution) {
+                width = Number(resolution.width)
+                height = Number(resolution.height)
+            }
+        } catch (ignoredMetadataError) {
+        }
+
+        if (width > 1920 || height > 1080) {
+            console.log("SailVideo Cast: MP4 exceeds conservative direct H.264 envelope "
+                        + width + "x" + height
+                        + "; preparing VP8/Vorbis WebM fallback")
+            return true
+        }
+
+        return false
+    }
+
     function resetAviLocalSeek() {
         aviLocalSeekPauseTimer.stop()
         aviLocalSeekCompletionTimer.stop()
@@ -642,6 +683,7 @@ ApplicationWindow {
         aviCastPendingPosition = 0
         aviCastResumeLocalOnFailure = false
         aviCastTranscoding = false
+        castCompatibilityTranscodePending = false
     }
 
     function releasePreparedAviCache() {
@@ -676,9 +718,12 @@ ApplicationWindow {
         var shouldResume = aviCastResumeLocalOnFailure
         var failedTitle = currentMediaTitle
         var failedSeek = aviCastPendingMode === "seek"
+        var compatibilityTranscode = castCompatibilityTranscodePending
         var failureText = message && String(message).length > 0
                 ? String(message)
-                : qsTr("This AVI could not be prepared for Chromecast.")
+                : (compatibilityTranscode
+                   ? qsTr("This video could not be converted for Chromecast.")
+                   : qsTr("This AVI could not be prepared for Chromecast."))
         resetPendingAviCast()
 
         if (failedSeek && (castManager.connected || castManager.casting)) {
@@ -775,6 +820,69 @@ ApplicationWindow {
         }
 
         if (!castMediaPreparer.prepareAvi(inputUrl, prepKey, position)) {
+            return failPendingAviCast(castMediaPreparer.lastError)
+        }
+
+        return true
+    }
+
+
+    function prepareCompatibilityCast(mode, deviceName, host, port, startPosition) {
+        if (castMediaPreparer.busy) {
+            playbackError = qsTr("Another video is already being prepared for Chromecast.")
+            playbackStatus = playbackError
+            return false
+        }
+
+        var inputUrl = cleanedValue(currentPlaybackUrl)
+        if (inputUrl.length === 0) {
+            inputUrl = cleanedValue(currentMediaUrl)
+        }
+        if (inputUrl.length === 0) {
+            playbackError = qsTr("The video playback source is unavailable.")
+            playbackStatus = playbackError
+            return false
+        }
+
+        var position = startPosition !== undefined && startPosition !== null
+                ? Math.max(0, Math.round(startPosition))
+                : Math.max(0, playbackPosition())
+        if (position <= 0 && lastKnownPosition > 0) {
+            position = lastKnownPosition
+        }
+
+        var wasPlaying = mediaPlayer.playbackState === MediaPlayer.PlayingState
+        if (mode === "start") {
+            savePlaybackPosition(false)
+            lastKnownPosition = position
+        }
+
+        var mediaSourceKey = currentMediaUrl
+        var prepKey = mediaSourceKey + "|cast-compat-webm-720p"
+
+        aviCastPending = true
+        aviCastPendingMode = mode
+        aviCastPendingSourceKey = prepKey
+        aviCastPendingMediaUrl = mediaSourceKey
+        aviCastPendingDeviceName = cleanedValue(deviceName)
+        aviCastPendingHost = cleanedValue(host)
+        aviCastPendingPort = port > 0 ? port : 8009
+        aviCastPendingPosition = position
+        aviCastResumeLocalOnFailure = mode === "start" && wasPlaying
+        aviCastTranscoding = true
+        castCompatibilityTranscodePending = true
+        aviCastStreamingStarted = false
+        aviCastGrowingFileUrl = ""
+
+        clearUnsupportedCastVideo()
+        playbackError = ""
+        playbackStatus = qsTr("Transcoding video for Chromecast")
+
+        if (wasPlaying) {
+            mediaPlayer.pause()
+        }
+
+        if (!castMediaPreparer.prepareCastTranscode(inputUrl, prepKey)) {
             return failPendingAviCast(castMediaPreparer.lastError)
         }
 
@@ -952,6 +1060,7 @@ ApplicationWindow {
         }
 
         var mode = aviCastPendingMode
+        var compatibilityTranscode = castCompatibilityTranscodePending
         var deviceName = aviCastPendingDeviceName
         var host = aviCastPendingHost
         var port = aviCastPendingPort
@@ -980,7 +1089,9 @@ ApplicationWindow {
             resetPendingAviCast()
             clearUnsupportedCastVideo()
             playbackError = ""
-            playbackStatus = qsTr("Loading AVI on Chromecast")
+            playbackStatus = compatibilityTranscode
+                    ? qsTr("Loading converted video on Chromecast")
+                    : qsTr("Loading AVI on Chromecast")
 
             if (!castManager.replaceMediaWithVolume(remoteUrl,
                                                     contentType,
@@ -1165,6 +1276,18 @@ ApplicationWindow {
             return false
         }
 
+        if (!picture && currentVideoNeedsCastCompatibilityTranscode()) {
+            var compatibilityStartPosition = playbackPosition()
+            if (compatibilityStartPosition <= 0 && lastKnownPosition > 0) {
+                compatibilityStartPosition = lastKnownPosition
+            }
+            return prepareCompatibilityCast("start",
+                                            deviceName,
+                                            cleanHost,
+                                            port > 0 ? port : 8009,
+                                            compatibilityStartPosition)
+        }
+
         if (!picture && isAviVideo(currentMediaTitle, currentMediaUrl)) {
             var aviStartPosition = playbackPosition()
             if (aviStartPosition <= 0 && lastKnownPosition > 0) {
@@ -1297,6 +1420,14 @@ ApplicationWindow {
         var startPosition = startPositionMs !== undefined && startPositionMs !== null
                 ? Math.max(0, Math.round(startPositionMs))
                 : Math.max(0, lastKnownPosition)
+
+        if (currentVideoNeedsCastCompatibilityTranscode()) {
+            return prepareCompatibilityCast("replace",
+                                            castManager.deviceName,
+                                            castManager.host,
+                                            castManager.port,
+                                            startPosition)
+        }
 
         if (isAviVideo(currentMediaTitle, currentMediaUrl)) {
             return prepareAviCast("replace",
@@ -3156,7 +3287,9 @@ ApplicationWindow {
                     && sourceKey === appWindow.aviCastPendingSourceKey) {
                 appWindow.aviCastTranscoding = true
                 appWindow.playbackError = ""
-                appWindow.playbackStatus = qsTr("Transcoding AVI for Chromecast")
+                appWindow.playbackStatus = appWindow.castCompatibilityTranscodePending
+                        ? qsTr("Transcoding video for Chromecast")
+                        : qsTr("Transcoding AVI for Chromecast")
             }
         }
 
@@ -3164,15 +3297,20 @@ ApplicationWindow {
             if (appWindow.aviCastPending
                     && !appWindow.aviCastStreamingStarted
                     && sourceKey === appWindow.aviCastPendingSourceKey) {
-                appWindow.playbackStatus = qsTr("Transcoding AVI for Chromecast (%1 buffered)")
-                        .arg(appWindow.formatBytes(bytesWritten))
+                appWindow.playbackStatus = appWindow.castCompatibilityTranscodePending
+                        ? qsTr("Transcoding video for Chromecast (%1)")
+                              .arg(appWindow.formatBytes(bytesWritten))
+                        : qsTr("Transcoding AVI for Chromecast (%1 buffered)")
+                              .arg(appWindow.formatBytes(bytesWritten))
             }
         }
 
         onTranscodeStreamReady: {
-            appWindow.startStreamingPreparedAviCast(sourceKey,
-                                                    fileUrl,
-                                                    contentType)
+            if (!appWindow.castCompatibilityTranscodePending) {
+                appWindow.startStreamingPreparedAviCast(sourceKey,
+                                                        fileUrl,
+                                                        contentType)
+            }
         }
 
         onFailed: {

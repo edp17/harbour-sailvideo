@@ -898,6 +898,7 @@ ApplicationWindow {
         }
 
         var mode = aviCastPendingMode
+        var compatibilityTranscode = castCompatibilityTranscodePending
         var deviceName = aviCastPendingDeviceName
         var host = aviCastPendingHost
         var port = aviCastPendingPort
@@ -909,7 +910,9 @@ ApplicationWindow {
             failPendingAviCast(
                         localFileStreamServer.lastError.length > 0
                         ? localFileStreamServer.lastError
-                        : qsTr("The transcoded AVI buffer could not be exposed to Chromecast."))
+                        : (compatibilityTranscode
+                           ? qsTr("The converted video buffer could not be exposed to Chromecast.")
+                           : qsTr("The transcoded AVI buffer could not be exposed to Chromecast.")))
             return
         }
 
@@ -1008,6 +1011,7 @@ ApplicationWindow {
             return false
         }
 
+        var compatibilityTranscode = castCompatibilityTranscodePending
         localFileStreamServer.markGrowingLocalFileComplete(fileUrl)
 
         var host = cleanedValue(castManager.host)
@@ -1043,7 +1047,9 @@ ApplicationWindow {
         aviCastGrowingFileUrl = fileUrl
         resetPendingAviCast()
         playbackError = ""
-        playbackStatus = qsTr("AVI prepared; enabling seek on Chromecast")
+        playbackStatus = compatibilityTranscode
+                ? qsTr("Video conversion finished; seek enabled on Chromecast")
+                : qsTr("AVI prepared; enabling seek on Chromecast")
         return true
     }
 
@@ -1840,6 +1846,12 @@ ApplicationWindow {
         }
 
         if (videoCastActive) {
+            if (castCompatibilityTranscodePending
+                    && aviCastProgressiveSession) {
+                playbackStatus = qsTr("Seek will be available when video conversion finishes")
+                return
+            }
+
             castEstimatedPosition = safeTarget
             if (isAviVideo(currentMediaTitle, currentMediaUrl)
                     && (aviCastProgressiveSession || aviCastTimelineOffset > 0)) {
@@ -1888,6 +1900,12 @@ ApplicationWindow {
         }
 
         if (videoCastActive) {
+            if (castCompatibilityTranscodePending
+                    && aviCastProgressiveSession) {
+                playbackStatus = qsTr("Restart will be available when video conversion finishes")
+                return
+            }
+
             var castAvi = isAviVideo(currentMediaTitle, currentMediaUrl)
 
             if (castAvi && castManager.mediaStopped && playbackCompleted) {
@@ -3310,6 +3328,24 @@ ApplicationWindow {
                 appWindow.startStreamingPreparedAviCast(sourceKey,
                                                         fileUrl,
                                                         contentType)
+                return
+            }
+
+            // Generic MP4 WebM starts at source time zero. A growing stream
+            // has no Range support yet, so use progressive LOAD only for a
+            // near-zero handoff. Mid-video handoff keeps r14 behaviour and
+            // waits for the completed seekable WebM.
+            if (appWindow.aviCastPendingPosition <= 2000) {
+                console.log("SailVideo Cast compatibility: startup buffer ready; "
+                            + "starting progressive WebM")
+                appWindow.startStreamingPreparedAviCast(sourceKey,
+                                                        fileUrl,
+                                                        contentType)
+            } else {
+                console.log("SailVideo Cast compatibility: startup buffer ready "
+                            + "but handoff position is "
+                            + appWindow.aviCastPendingPosition
+                            + " ms; waiting for completed WebM")
             }
         }
 

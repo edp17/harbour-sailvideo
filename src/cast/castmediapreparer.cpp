@@ -1674,18 +1674,23 @@ void CastMediaPreparer::pollBus()
             emit transcodeProgress(m_sourceKey, bytes);
         }
 
-        // The Xperia 10 III test pipeline produced data comfortably faster
-        // than playback. One MiB gets the receiver probing sooner while still
-        // leaving a useful initial buffer.
-        const qint64 StartBufferBytes = 1 * 1024 * 1024;
+        // Keep the proven 1 MiB AVI threshold. High-resolution MP4
+        // compatibility transcoding is CPU-heavier (software H.264 decode,
+        // orientation/scale and VP8 encode), so start it with a larger lead.
+        const qint64 StartBufferBytes = m_genericCastTranscode
+                ? 3 * 1024 * 1024
+                : 1 * 1024 * 1024;
         if (!m_streamReadyEmitted
                 && m_videoLinked.load()
                 && bytes >= StartBufferBytes) {
             m_streamReadyEmitted = true;
             const QString fileUrl = QUrl::fromLocalFile(m_partPath).toString();
             qInfo() << diagnosticTag()
-                    << "SailVideo Cast transcode: progressive WebM buffer ready"
-                    << bytes << "bytes";
+                    << (m_genericCastTranscode
+                        ? "SailVideo Cast compatibility: progressive WebM buffer ready"
+                        : "SailVideo Cast transcode: progressive WebM buffer ready")
+                    << bytes << "bytes"
+                    << "threshold" << StartBufferBytes;
             emit transcodeStreamReady(m_sourceKey,
                                       fileUrl,
                                       QStringLiteral("video/webm"));

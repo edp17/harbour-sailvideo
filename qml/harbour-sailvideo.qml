@@ -340,6 +340,16 @@ ApplicationWindow {
         setVolumePercent(volumePercent() + deltaPercent)
     }
 
+    function castReplacementVolumePercent() {
+        if (castManager.connected && castManager.volumeKnown) {
+            return castManager.volumePercent
+        }
+
+        console.log("SailVideo Cast: receiver volume not known yet; "
+                    + "using local playback volume " + playbackVolumePercent)
+        return playbackVolumePercent
+    }
+
     function brightnessPercent() {
         return Math.round((1.0 - videoDimming) * 100)
     }
@@ -1028,9 +1038,7 @@ ApplicationWindow {
         }
 
         var resumePosition = Math.max(0, castManager.position)
-        var requestedVolume = castManager.mediaInfoKnown && !castManager.imageMedia
-                ? castManager.volumePercent
-                : playbackVolumePercent
+        var requestedVolume = castReplacementVolumePercent()
 
         if (!castManager.replaceMediaWithVolume(remoteUrl,
                                                 contentType,
@@ -1459,9 +1467,7 @@ ApplicationWindow {
         lastKnownPosition = startPosition
         castEstimatedPosition = startPosition
         var contentType = castManager.contentTypeForUrl(remoteUrl, currentMediaTitle)
-        var requestedVolume = castManager.mediaInfoKnown && !castManager.imageMedia
-                ? castManager.volumePercent
-                : playbackVolumePercent
+        var requestedVolume = castReplacementVolumePercent()
         return castManager.replaceMediaWithVolume(remoteUrl,
                                                   contentType,
                                                   currentMediaTitle,
@@ -2532,75 +2538,48 @@ ApplicationWindow {
             return false
         }
 
-        var wasCasting = videoCastActive
-        var deviceName = castManager.deviceName.length > 0
-                ? castManager.deviceName : castLastDeviceName
-        var deviceHost = castManager.host.length > 0
-                ? castManager.host : castLastHost
-        var devicePort = castManager.port > 0
-                ? castManager.port : castLastPort
-
+        var wasCasting = videoCastActive && castManager.connected
         var item = playbackQueue[index]
         playbackQueueIndex = index
-        if (item.kind === "smb") {
-            if (wasCasting) {
-                // Close only our sender connection. The receiver keeps the old
-                // item running until the new LOAD arrives.
-                castManager.detach()
-                castRequested = false
-                castResumeLocalAfterDisconnect = false
-                lastKnownPosition = 0
-            }
 
-            var opened = openSmbFile(item.host, item.port, item.share, item.path,
-                                     item.domain, item.username, item.password,
-                                     item.guest, item.size, item.title, 0)
-            if (opened && wasCasting && deviceHost.length > 0) {
-                castTargetKind = "video"
-                return startCastingToDevice(deviceName, deviceHost, devicePort)
-            }
-            return opened
+        // Keep the current Cast session alive across Previous/Next/auto-next.
+        // This mirrors openFolderMediaQueueIndex(): playSource() must not reset
+        // local playback adjustments while we are preparing a remote queue
+        // replacement, and castCurrentVideoToConnectedDevice() will reuse the
+        // receiver's confirmed current volume through replaceMediaWithVolume().
+        if (wasCasting) {
+            castTargetKind = "video"
+            remoteQueueSwitch = true
+            keepCastControlPageDuringQueueSwitch = true
         }
 
-        if (item.kind === "rememberedSmb") {
-            if (wasCasting) {
-                castManager.detach()
-                castRequested = false
-                castResumeLocalAfterDisconnect = false
-                lastKnownPosition = 0
-            }
-
-            var rememberedOpened = openRememberedSmbFromUrl(
+        var opened = false
+        if (item.kind === "smb") {
+            opened = openSmbFile(item.host, item.port, item.share, item.path,
+                                 item.domain, item.username, item.password,
+                                 item.guest, item.size, item.title, 0)
+        } else if (item.kind === "rememberedSmb") {
+            opened = openRememberedSmbFromUrl(
                         item.url,
                         item.title,
                         0,
                         true)
-            if (rememberedOpened && wasCasting && deviceHost.length > 0) {
-                castTargetKind = "video"
-                return startCastingToDevice(deviceName,
-                                            deviceHost,
-                                            devicePort)
-            }
-            return rememberedOpened
-        }
-
-        if (item.kind === "local") {
-            if (wasCasting) {
-                castManager.detach()
-                castRequested = false
-                castResumeLocalAfterDisconnect = false
-                lastKnownPosition = 0
-            }
-
+        } else if (item.kind === "local") {
             openMedia(item.url, item.title, 0, true)
-            if (wasCasting && deviceHost.length > 0) {
-                castTargetKind = "video"
-                return startCastingToDevice(deviceName, deviceHost, devicePort)
-            }
-            return true
+            opened = true
         }
 
-        return false
+        remoteQueueSwitch = false
+        keepCastControlPageDuringQueueSwitch = false
+
+        if (opened && wasCasting) {
+            lastKnownPosition = 0
+            console.log("SailVideo Cast queue: replacing media in existing session; "
+                        + "receiverVolume=" + castManager.volumePercent)
+            return castCurrentVideoToConnectedDevice(0)
+        }
+
+        return opened
     }
 
     function playPreviousVideo() {
@@ -2981,12 +2960,25 @@ ApplicationWindow {
         }
 
         resetAviLocalSeek()
-        mediaPlayer.stop()
-        if (!remoteQueueSwitch) {
+        if (remoteQueueSwitch) {
+            // The receiver owns playback during a remote queue change. Avoid
+            // explicitly stopping and clearing the local QtMultimedia source:
+            // assigning the new source already performs one orderly teardown.
+            // This also keeps the new item's metadata available for Cast
+            // compatibility checks without sending repeated STOPPING commands
+            // through gst-droid/MediaCodec.
+            playerSuspended = true
+            pendingResumeSeek = false
+            pendingResumeAttempts = 0
+            resumeSeekTimer.stop()
+            console.log("SailVideo Cast queue: single suspended local source swap")
+            mediaPlayer.source = currentPlaybackUrl
+        } else {
+            mediaPlayer.stop()
             resetPlaybackAdjustmentsForNewVideo()
+            mediaPlayer.source = ""
+            mediaPlayer.source = currentPlaybackUrl
         }
-        mediaPlayer.source = ""
-        mediaPlayer.source = currentPlaybackUrl
 
         playbackHistory.addOrUpdate(currentMediaUrl,
                                     currentMediaTitle,

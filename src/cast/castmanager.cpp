@@ -202,6 +202,7 @@ QString CastManager::playerState() const { return m_playerState; }
 qint64 CastManager::position() const { return m_position; }
 qint64 CastManager::duration() const { return m_duration; }
 int CastManager::volumePercent() const { return m_volumePercent; }
+bool CastManager::volumeKnown() const { return m_volumeKnown; }
 bool CastManager::muted() const { return m_muted; }
 QString CastManager::statusText() const { return m_statusText; }
 QString CastManager::lastError() const { return m_lastError; }
@@ -395,6 +396,7 @@ void CastManager::resetForNewRequest()
     m_stopRequested = false;
     m_stoppedPosition = 0;
     m_initialVolumePercent = -1;
+    setVolumeKnown(false);
     m_pollTick = 0;
     const bool hadMediaInfo = !m_activeContentType.isEmpty();
     m_activeContentType.clear();
@@ -425,6 +427,7 @@ void CastManager::clearSessionState(bool preservePosition)
     m_stopRequested = false;
     m_stoppedPosition = 0;
     m_initialVolumePercent = -1;
+    setVolumeKnown(false);
     const bool hadMediaInfo = !m_activeContentType.isEmpty();
     m_activeContentType.clear();
     if (hadMediaInfo) {
@@ -921,6 +924,7 @@ void CastManager::setVolumePercent(int percent)
     payload.insert(QStringLiteral("volume"), volume);
     sendJson(QString::fromLatin1(ReceiverId), QString::fromLatin1(NsReceiver), payload);
     setVolumeInternal(bounded);
+    setVolumeKnown(true);
 }
 
 void CastManager::setMuted(bool muted)
@@ -1119,6 +1123,7 @@ void CastManager::processReceiverStatus(const QJsonObject &message)
                 qBound(0,
                        qRound(volume.value(QStringLiteral("level")).toDouble() * 100.0),
                        100);
+        setVolumeKnown(true);
         if (m_initialVolumePercent >= 0) {
             if (qAbs(reportedVolume - m_initialVolumePercent) > 1) {
                 qInfo() << "SailVideo Cast: receiver reported volume"
@@ -1491,6 +1496,13 @@ void CastManager::setVolumeInternal(int percent)
     if (m_volumePercent == percent) return;
     m_volumePercent = percent;
     emit volumePercentChanged();
+}
+
+void CastManager::setVolumeKnown(bool known)
+{
+    if (m_volumeKnown == known) return;
+    m_volumeKnown = known;
+    emit volumeKnownChanged();
 }
 
 void CastManager::setMutedInternal(bool muted)

@@ -35,6 +35,7 @@ class CastManager : public QObject
     Q_PROPERTY(qint64 position READ position NOTIFY positionChanged)
     Q_PROPERTY(qint64 duration READ duration NOTIFY durationChanged)
     Q_PROPERTY(int volumePercent READ volumePercent NOTIFY volumePercentChanged)
+    Q_PROPERTY(bool volumeKnown READ volumeKnown NOTIFY volumeKnownChanged)
     Q_PROPERTY(bool muted READ muted NOTIFY mutedChanged)
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
@@ -58,6 +59,7 @@ public:
     qint64 position() const;
     qint64 duration() const;
     int volumePercent() const;
+    bool volumeKnown() const;
     bool muted() const;
     QString statusText() const;
     QString lastError() const;
@@ -107,6 +109,7 @@ signals:
     void positionChanged();
     void durationChanged();
     void volumePercentChanged();
+    void volumeKnownChanged();
     void mutedChanged();
     void statusTextChanged();
     void lastErrorChanged();
@@ -141,6 +144,7 @@ private:
     void setPosition(qint64 value);
     void setDuration(qint64 value);
     void setVolumeInternal(int percent);
+    void setVolumeKnown(bool known);
     void setMutedInternal(bool muted);
     void setStatusText(const QString &text);
     void setLastError(const QString &message);
@@ -206,6 +210,7 @@ private:
     qint64 m_position = 0;
     qint64 m_duration = 0;
     int m_volumePercent = 100;
+    bool m_volumeKnown = false;
     bool m_muted = false;
     QString m_statusText;
     QString m_lastError;

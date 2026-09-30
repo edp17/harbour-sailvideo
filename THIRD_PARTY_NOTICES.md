@@ -14,8 +14,8 @@ For every reused source file or substantial source section, SailVideo must:
 4. avoid any wording which suggests that the original developer or LLs
    Video Player endorses SailVideo.
 
-SailVideo 1.0 contains no source code copied, adapted, modified or rewritten
-from LLs Video Player. The notice and licence infrastructure are retained so
+SailVideo through 1.1.0.17 contains no source code copied, adapted, modified
+or rewritten from LLs Video Player. The notice and licence infrastructure are retained so
 that any future reuse cannot be introduced without the required attribution.
 
 ## libsmb2

@@ -1,7 +1,7 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
 Version:    1.1.0.17
-Release:    18
+Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
 Source0:    %{name}-%{version}.tar.bz2
@@ -61,6 +61,17 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Wed Sep 30 2026 edp17 <edp17@pm.me> - 1.1.0.17-1
+- Add folder-queue auto-next for local and Chromecast playback
+- Improve the interactive seek bar with drag preview and a single seek on release
+- Improve AVI Chromecast preparation, seek regeneration and growing-WebM delivery
+- Add compatibility casting for high-resolution H.264 MP4 using orientation-aware 720p VP8/Vorbis transcoding
+- Start compatible MP4 fallback playback from a growing buffer instead of always waiting for the full conversion
+- Preserve Chromecast receiver volume across Previous, Next, auto-next and in-session media replacement
+- Avoid repeated QtMultimedia/gst-droid teardown while switching Cast queue items
+- Replace the active Chromecast media when another local or SMB video is selected during an ongoing Cast
+- Keep normal Sailfish QtMultimedia playback and the existing SMB Range architecture unchanged
+
 * Sat Sep 19 2026 edp17 <edp17@pm.me> - 1.1.0.12-1
 - Add Cast-only AVI compatibility preparation using GStreamer
 - Remux H.264 AVI with AAC or MP3 audio into MP4 without re-encoding

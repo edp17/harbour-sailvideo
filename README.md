@@ -137,7 +137,7 @@ Bundled libsmb2 is licensed under LGPL-2.1-or-later. See:
 
 The repository also retains BSD 3-Clause licence material and a reuse ledger for
 LLs Video Player. No LLs Video Player source code has been incorporated through
-SailVideo 1.1.0.12. See:
+SailVideo 1.1.0.17. See:
 
 - `LICENSES/BSD-3-Clause-LLs.txt`
 - `THIRD_PARTY_NOTICES.md`
@@ -187,3 +187,23 @@ release line.
 - Preserves the media already playing on the TV instead of sending a duplicate
   LOAD during reconnect.
 - Keeps the local/SMB LAN HTTP bridge available while the Cast sender reconnects.
+
+## SailVideo 1.1.0.17 — Cast compatibility and queue stability
+
+SailVideo 1.1.0.17 focuses on more reliable queue playback and Chromecast
+compatibility while preserving the native Sailfish QtMultimedia playback path.
+
+- Adds folder-queue auto-next for local and Chromecast playback.
+- Improves the seek bar with drag-time preview and one seek request on release.
+- Improves AVI Cast preparation and seek handling through regenerated prepared
+  media and growing WebM delivery.
+- Adds a Cast-only fallback for high-resolution H.264 MP4 that falls outside
+  the conservative receiver profile: software decode, orientation-aware
+  scaling and VP8/Vorbis WebM output capped at 720p.
+- Starts compatible MP4 fallback playback from a growing buffer when possible
+  instead of always waiting for the complete transcode.
+- Preserves the receiver volume across Previous/Next, auto-next and direct
+  in-session media replacement.
+- Avoids repeated local QtMultimedia teardown during remote queue changes.
+- Selecting another local or SMB video during an active Cast now replaces the
+  video on the receiver rather than starting an independent phone playback.

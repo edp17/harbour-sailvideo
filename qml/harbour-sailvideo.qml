@@ -2790,7 +2790,26 @@ ApplicationWindow {
             clearPictureQueue()
             clearFolderMediaQueue()
         }
+
+        var replaceConnectedCast = castManager.connected
+                && !castManager.disconnecting
+                && !remoteQueueSwitch
+        if (replaceConnectedCast) {
+            castTargetKind = "video"
+            remoteQueueSwitch = true
+        }
+
         playSource(mediaUrl, mediaUrl, title, resumePosition, false)
+
+        if (replaceConnectedCast) {
+            remoteQueueSwitch = false
+            console.log("SailVideo Cast selection: replacing connected receiver "
+                        + "with directly selected local video")
+            return castCurrentVideoToConnectedDevice(
+                        Math.max(0, lastKnownPosition))
+        }
+
+        return true
     }
 
     function openLocalFileThroughBridge(mediaUrl, title, resumePosition) {
@@ -2898,8 +2917,25 @@ ApplicationWindow {
         currentSmbSize = size > 0 ? size : 0
         syncSmbQueueIndices(cleanPath, "video")
 
+        var replaceConnectedCast = castManager.connected
+                && !castManager.disconnecting
+                && !remoteQueueSwitch
+        if (replaceConnectedCast) {
+            castTargetKind = "video"
+            remoteQueueSwitch = true
+        }
+
         playSource(sourceUrl, streamUrl, fileTitle, resumePosition, true, "smb")
         persistSmbPlaybackQueueSnapshot(sourceUrl)
+
+        if (replaceConnectedCast) {
+            remoteQueueSwitch = false
+            console.log("SailVideo Cast selection: replacing connected receiver "
+                        + "with directly selected SMB video")
+            return castCurrentVideoToConnectedDevice(
+                        Math.max(0, lastKnownPosition))
+        }
+
         return true
     }
 

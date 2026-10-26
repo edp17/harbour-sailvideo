@@ -59,6 +59,7 @@ private:
     std::unique_ptr<SmbFileReader> m_reader;
     QHash<quint64, Request> m_requests;
     QList<quint64> m_order;
+    bool m_readTimeoutArmed = false;
     bool m_processScheduled = false;
     bool m_stopping = false;
 };

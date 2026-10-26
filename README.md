@@ -137,7 +137,7 @@ Bundled libsmb2 is licensed under LGPL-2.1-or-later. See:
 
 The repository also retains BSD 3-Clause licence material and a reuse ledger for
 LLs Video Player. No LLs Video Player source code has been incorporated through
-SailVideo 1.1.0.17. See:
+SailVideo 1.1.0.18. See:
 
 - `LICENSES/BSD-3-Clause-LLs.txt`
 - `THIRD_PARTY_NOTICES.md`
@@ -207,3 +207,25 @@ compatibility while preserving the native Sailfish QtMultimedia playback path.
 - Avoids repeated local QtMultimedia teardown during remote queue changes.
 - Selecting another local or SMB video during an active Cast now replaces the
   video on the receiver rather than starting an independent phone playback.
+
+## SailVideo 1.1.0.18 — SMB Chromecast streaming stability
+
+SailVideo 1.1.0.18 fixes recurring Chromecast buffering seen while serving some
+MP4 files directly from SMB/NAS storage through SailVideo's LAN HTTP Range
+bridge.
+
+- Increases the persistent SMB streaming read quantum from 64 KiB to the
+  device-tested 256 KiB, reducing per-read SMB latency overhead while retaining
+  fair scheduling between overlapping receiver Range requests.
+- Keeps the device awake while Chromecast depends on SailVideo's LAN bridge for
+  local or SMB media.
+- Adds bounded timeouts only after SMB streaming has successfully started.
+- Hard-discards an unhealthy libsmb2 context before reopening it, avoiding
+  CLOSE/TREE_DISCONNECT round trips over a stalled connection.
+- Adds slow-read and persistent-session diagnostics for future SMB/Cast
+  troubleshooting.
+- Declares `make` explicitly as a build dependency for refreshed Sailfish OS
+  5.1 SDK targets.
+- Keeps normal on-device playback on Sailfish QtMultimedia/GStreamer and keeps
+  direct HTTP/HTTPS Chromecast playback unchanged.
+

@@ -32,6 +32,8 @@ public:
     qint64 maxReadSize() const;
     qint64 fileSize(QString *errorString);
     QByteArray read(qint64 offset, qint64 count, QString *errorString);
+    bool setCommandTimeoutSeconds(int seconds);
+    void abortConnection();
     QString errorString() const;
 
 private:

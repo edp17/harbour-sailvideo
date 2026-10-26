@@ -232,6 +232,15 @@ ApplicationWindow {
                          && !appWindow.playerSuspended
     }
 
+    // A bridged Cast session depends on this process continuing to service
+    // the LAN HTTP socket (and, for NAS media, the SMB worker) after the phone
+    // display blanks. DisplayBlanking only keeps the screen on; it does not
+    // prevent device suspend. Keep direct HTTP/HTTPS Cast independent so the
+    // phone may still suspend when Chromecast no longer needs SailVideo.
+    KeepAlive {
+        enabled: appWindow.castUsesLanBridge && appWindow.castMode
+    }
+
     function twoDigits(value) {
         return value < 10 ? "0" + value : value
     }

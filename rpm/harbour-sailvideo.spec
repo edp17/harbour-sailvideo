@@ -1,12 +1,13 @@
 Name:       harbour-sailvideo
 Summary:    Local and network video player for Sailfish OS
-Version:    1.1.0.17
+Version:    1.1.0.18
 Release:    1
 License:    GPL-3.0-or-later AND LGPL-2.1-or-later
 URL:        https://github.com/edp17/harbour-sailvideo
 Source0:    %{name}-%{version}.tar.bz2
 
 BuildRequires: cmake
+BuildRequires: make
 BuildRequires: pkgconfig(Qt5Core)
 BuildRequires: pkgconfig(Qt5Gui)
 BuildRequires: pkgconfig(Qt5Qml)
@@ -61,6 +62,16 @@ HTTP/HTTPS media URLs, SMB/NAS media, and Google Chromecast media casting.
 %{_datadir}/harbour-sailvideo/qml
 
 %changelog
+* Sat Oct 24 2026 edp17 <edp17@pm.me> - 1.1.0.18-1
+- Fix recurring Chromecast buffering while streaming higher-demand MP4 files from SMB/NAS
+- Increase the persistent SMB streaming read quantum from 64 KiB to the tested 256 KiB
+- Keep bridged Chromecast sessions awake while the phone serves local/SMB media
+- Bound established SMB streaming reads and recover stalled transports with a hard context discard and fresh reopen
+- Avoid graceful SMB close/disconnect round trips when the streaming transport is already unhealthy
+- Add slow-read and persistent-session diagnostics for Chromecast SMB streaming
+- Declare make explicitly as a build dependency for refreshed Sailfish OS 5.1 SDK targets
+- Preserve the normal Sailfish QtMultimedia/GStreamer playback architecture and Chromecast HTTP Range bridge
+
 * Wed Sep 30 2026 edp17 <edp17@pm.me> - 1.1.0.17-1
 - Add folder-queue auto-next for local and Chromecast playback
 - Improve the interactive seek bar with drag preview and a single seek on release

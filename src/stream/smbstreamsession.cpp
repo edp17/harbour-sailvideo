@@ -5,9 +5,15 @@
 #include "smbstreamsession.h"
 #include "smb/smbbackend.h"
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QMetaObject>
 #include <QThread>
-namespace { const qint64 SessionReadChunk = 64 * 1024; }
+
+namespace {
+const qint64 SessionReadChunk = 256 * 1024;
+const int StreamingReadTimeoutSeconds = 5;
+const qint64 SlowReadWarningMs = 1000;
+}
 
 SmbStreamSession::SmbStreamSession(const QString &token,
                                    const QString &host, int port,
@@ -101,7 +107,11 @@ void SmbStreamSession::shutdown()
     m_stopping = true;
     m_requests.clear();
     m_order.clear();
-    m_reader.reset();
+    if (m_reader) {
+        m_reader->abortConnection();
+        m_reader.reset();
+    }
+    m_readTimeoutArmed = false;
     qInfo() << "SailVideo SMB session:" << m_token.left(8) << "stopped";
     emit stopped(m_token);
 }
@@ -121,11 +131,14 @@ bool SmbStreamSession::ensureReader(bool retry, QString *errorString)
                                     m_domain, m_username, m_password,
                                     m_guest, &error);
         if (m_reader && m_reader->isOpen()) {
+            m_readTimeoutArmed = false;
             if (errorString) errorString->clear();
             qInfo() << "SailVideo SMB session:" << m_token.left(8)
-                    << "opened persistent reader";
+                    << "opened persistent reader; maxRead"
+                    << m_reader->maxReadSize();
             return true;
         }
+        m_readTimeoutArmed = false;
         m_reader.reset();
         if (i + 1 < attempts && !m_stopping) {
             qInfo() << "SailVideo SMB session:" << m_token.left(8)
@@ -192,8 +205,23 @@ void SmbStreamSession::processNext()
     }
 
     const qint64 wanted = qMin(SessionReadChunk, it->remaining);
+    const qint64 readOffset = it->offset;
     QString readError;
-    const QByteArray bytes = m_reader->read(it->offset, wanted, &readError);
+    QElapsedTimer readTimer;
+    readTimer.start();
+    const QByteArray bytes = m_reader->read(readOffset, wanted, &readError);
+    const qint64 readMs = readTimer.elapsed();
+
+    if (readMs >= SlowReadWarningMs) {
+        qWarning() << "SailVideo SMB session:" << m_token.left(8)
+                   << "slow read" << id
+                   << "offset" << readOffset
+                   << "wanted" << wanted
+                   << "received" << bytes.size()
+                   << "elapsedMs" << readMs
+                   << "active" << m_requests.size()
+                   << "error" << readError;
+    }
 
     it = m_requests.find(id);
     if (it == m_requests.end()) {
@@ -202,9 +230,20 @@ void SmbStreamSession::processNext()
     }
 
     if (bytes.isEmpty()) {
+        // Any failed/timed-out read makes this context untrusted. Destroy it
+        // locally instead of asking the same transport to perform CLOSE and
+        // TREE_DISCONNECT before the existing one-time reopen/retry.
+        if (m_reader) {
+            qWarning() << "SailVideo SMB session:" << m_token.left(8)
+                       << "hard-discarding reader after read failure"
+                       << id << readError;
+            m_reader->abortConnection();
+            m_reader.reset();
+        }
+        m_readTimeoutArmed = false;
+
         if (it->readReconnects < 1 && !m_stopping) {
             ++it->readReconnects;
-            m_reader.reset();
             m_order.append(id);
             qInfo() << "SailVideo SMB session:" << m_token.left(8)
                     << "reopening after read failure" << id << readError;
@@ -218,6 +257,21 @@ void SmbStreamSession::processNext()
         emit requestFailed(id, msg);
         scheduleProcess();
         return;
+    }
+
+    // Preserve cold-NAS behaviour: connect/open and the first media read have
+    // no command timeout. Once streaming has succeeded, bound later reads so
+    // a lost SMB reply cannot strand Chromecast's HTTP request forever.
+    if (!m_readTimeoutArmed && m_reader) {
+        if (m_reader->setCommandTimeoutSeconds(StreamingReadTimeoutSeconds)) {
+            m_readTimeoutArmed = true;
+            qInfo() << "SailVideo SMB session:" << m_token.left(8)
+                    << "armed streaming read timeout"
+                    << StreamingReadTimeoutSeconds << "seconds";
+        } else {
+            qWarning() << "SailVideo SMB session:" << m_token.left(8)
+                       << "libsmb2 command timeout API unavailable";
+        }
     }
 
     it->offset += bytes.size();

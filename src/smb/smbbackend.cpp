@@ -105,6 +105,7 @@ public:
     typedef void (*SetDomainFunc)(smb2_context *, const char *);
     typedef void (*SetAuthenticationFunc)(smb2_context *, int);
     typedef void (*SetSignFunc)(smb2_context *, int);
+    typedef void (*SetTimeoutFunc)(smb2_context *, int);
     typedef int (*ConnectShareFunc)(smb2_context *, const char *, const char *, const char *);
     typedef int (*DisconnectShareFunc)(smb2_context *);
     typedef const char *(*GetErrorFunc)(smb2_context *);
@@ -181,6 +182,7 @@ public:
     SetDomainFunc setDomain = nullptr;
     SetAuthenticationFunc setAuthentication = nullptr;
     SetSignFunc setSign = nullptr;
+    SetTimeoutFunc setTimeout = nullptr;
     ConnectShareFunc connectShare = nullptr;
     DisconnectShareFunc disconnectShare = nullptr;
     GetErrorFunc getError = nullptr;
@@ -209,12 +211,13 @@ private:
 
     bool resolveAll()
     {
-        // setAuthentication, setSign, smb2_stat and maxReadSize are useful
-        // but optional from the loader's point of view so older system libs can
-        // still load for directory browsing. File-size lookup reports a clear
-        // error if smb2_stat is unavailable.
+        // setAuthentication, setSign, setTimeout, smb2_stat and maxReadSize
+        // are useful but optional from the loader's point of view so older
+        // system libs can still load for directory browsing. File-size lookup
+        // reports a clear error if smb2_stat is unavailable.
         setAuthentication = reinterpret_cast<SetAuthenticationFunc>(m_library.resolve("smb2_set_authentication"));
         setSign = reinterpret_cast<SetSignFunc>(m_library.resolve("smb2_set_sign"));
+        setTimeout = reinterpret_cast<SetTimeoutFunc>(m_library.resolve("smb2_set_timeout"));
         lseek = reinterpret_cast<LSeekFunc>(m_library.resolve("smb2_lseek"));
         stat = reinterpret_cast<StatFunc>(m_library.resolve("smb2_stat"));
         maxReadSize = reinterpret_cast<MaxReadSizeFunc>(m_library.resolve("smb2_get_max_read_size"));
@@ -355,6 +358,7 @@ struct SmbFileReader::Private
     smb2_context *context = nullptr;
     smb2fh *handle = nullptr;
     qint64 maxRead = DefaultReadChunk;
+    int commandTimeoutSeconds = 0;
     QString errorString;
 };
 
@@ -461,6 +465,40 @@ QByteArray SmbFileReader::read(qint64 offset, qint64 count, QString *errorString
         errorString->clear();
     }
     return buffer;
+}
+
+bool SmbFileReader::setCommandTimeoutSeconds(int seconds)
+{
+    if (!isOpen() || !d->api.setTimeout) {
+        return false;
+    }
+
+    const int cleanSeconds = seconds > 0 ? seconds : 0;
+    if (d->commandTimeoutSeconds == cleanSeconds) {
+        return true;
+    }
+
+    d->api.setTimeout(d->context, cleanSeconds);
+    d->commandTimeoutSeconds = cleanSeconds;
+    return true;
+}
+
+void SmbFileReader::abortConnection()
+{
+    if (!d->context) {
+        d->handle = nullptr;
+        d->commandTimeoutSeconds = 0;
+        return;
+    }
+
+    // Do not perform SMB CLOSE/TREE_DISCONNECT on an unhealthy transport.
+    // smb2_destroy_context() closes the socket and frees pending work locally.
+    d->handle = nullptr;
+    if (d->api.destroyContext) {
+        d->api.destroyContext(d->context);
+    }
+    d->context = nullptr;
+    d->commandTimeoutSeconds = 0;
 }
 
 QString SmbFileReader::errorString() const
